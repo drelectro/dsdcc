@@ -13,10 +13,15 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
+#include "pch.h"
 
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include "dsd_filters.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace DSDcc
 {

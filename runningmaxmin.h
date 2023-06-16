@@ -101,11 +101,11 @@ public:
         n++;
     }
 
-    valuetype max()
+    valuetype max_()
     {
         return headvalue(&up);
     }
-    valuetype min()
+    valuetype min_()
     {
         return headvalue(&lo);
     }

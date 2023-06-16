@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
+#include "pch.h"
 
 #include <iostream>
 #include <stdlib.h>
@@ -328,8 +329,8 @@ void DSDSymbol::snapLevels(int nbSymbols)
 
 void DSDSymbol::snapMinMax()
 {
-    m_max = m_max + (m_lmmSamples.max() - m_max) / 4; // alpha = 0.25
-    m_min = m_min + (m_lmmSamples.min() - m_min) / 4; // alpha = 0.25
+    m_max = m_max + (m_lmmSamples.max_() - m_max) / 4; // alpha = 0.25
+    m_min = m_min + (m_lmmSamples.min_() - m_min) / 4; // alpha = 0.25
     // recalibrate center/umid/lmid
     m_center = ((m_max) + (m_min)) / 2;
     m_umid = (((m_max) - m_center) / 2) + m_center;

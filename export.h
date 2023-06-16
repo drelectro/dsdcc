@@ -21,9 +21,9 @@
 #  define __DSDCC_EXPORT   __attribute__((visibility("default")))
 #  define __DSDCC_IMPORT   __attribute__((visibility("default")))
 
-#elif defined (_MSC_VER)
-#  define __DSDCC_EXPORT   __declspec(dllexport)
-#  define __DSDCC_IMPORT   __declspec(dllimport)
+//#elif defined (_MSC_VER)
+//#  define __DSDCC_EXPORT   __declspec(dllexport)
+//#  define __DSDCC_IMPORT   __declspec(dllimport)
 
 #else
 #  define __DSDCC_EXPORT

@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
+#include "pch.h"
+#define NOMINMAX
 
 #define _USE_MATH_DEFINES
 #include <cmath>
@@ -21,6 +23,10 @@
 #include <stdio.h>
 #include <float.h>
 #include "phaselock.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace DSDcc
 {
@@ -206,7 +212,7 @@ void PhaseLock::process(const std::vector<float>& samples_in, std::vector<float>
         m_loopfilter_x1 = phase_err;
 
         // Limit frequency to allowable range.
-        m_freq = std::max(m_minfreq, std::min(m_maxfreq, m_freq));
+        m_freq = (std::max)(m_minfreq, (std::min)(m_maxfreq, m_freq));
 
         // Update locked phase.
         m_phase += m_freq;
@@ -299,7 +305,7 @@ void PhaseLock::process(const float& sample_in, float *samples_out)
 	m_loopfilter_x1 = phase_err;
 
 	// Limit frequency to allowable range.
-	m_freq = std::max(m_minfreq, std::min(m_maxfreq, m_freq));
+	m_freq = (std::max)(m_minfreq, (std::min)(m_maxfreq, m_freq));
 
 	// Update locked phase.
 	m_phase += m_freq;

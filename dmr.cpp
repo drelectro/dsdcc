@@ -13,12 +13,15 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
+#include "pch.h"
 
 #include <iostream>
 #include <string.h>
 #include "dmr.h"
 #include "dsd_decoder.h"
 #include "dsd_sync.h"
+
+#pragma warning(disable : 4996)
 
 namespace DSDcc
 {

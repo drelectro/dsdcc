@@ -39,10 +39,15 @@ public:
     {
         if (m_verbosity > 0)
         {
+            char buffer[1024];
             va_list argptr;
             va_start(argptr, fmt);
-            vfprintf(m_logfp, fmt, argptr);
+            //vfprintf(m_logfp, fmt, argptr);
+            _vsnprintf_s(buffer, sizeof(buffer) / sizeof(char), _TRUNCATE, fmt, argptr);
             va_end(argptr);
+
+            //TRACE(buffer);
+            OutputDebugStringA(buffer);
         }
     }
 
