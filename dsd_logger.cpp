@@ -14,8 +14,6 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
 
-#include "pch.h"
-
 #include "dsd_logger.h"
 
 #pragma warning(disable : 4996)
@@ -27,6 +25,8 @@ DSDLogger::DSDLogger()
 {
     m_verbosity = 1;
     m_logfp = stderr;
+    std::cout.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cout to OutputDebugString!
+    std::cerr.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cout to OutputDebugString!
 }
 
 DSDLogger::DSDLogger(const char *filename)

@@ -17,13 +17,64 @@
 #ifndef DSD_LOGGER_H_
 #define DSD_LOGGER_H_
 
+#include <sdkddkver.h>
+#include <afx.h>
+
 #include <stdio.h>
 #include <cstdarg>
 
+#include <streambuf>
+#include <ostream>
+#include <windows.h>
+#include <sstream>
+#include <iostream>
+
 #include "export.h"
+
+#include "../XMC_SDR.h"
+
+
+class dbg_stream_for_cout
+    : public std::stringbuf
+{
+public:
+    ~dbg_stream_for_cout() { sync(); }
+    int sync()
+    {
+        ::OutputDebugStringA(str().c_str());
+        CString s(str().c_str());
+        if(s.GetLength())
+            theApp.LogTextToRXView(s);
+        str(std::string()); // Clear the string buffer
+        return 0;
+    }
+};
 
 namespace DSDcc
 {
+/*
+class DebugOutput : public std::streambuf
+{
+protected:
+    virtual std::streamsize xsputn(const char* s, std::streamsize n)
+    {
+        OutputDebugStringA(std::string(s, n).c_str());
+        return n;
+    }
+
+    virtual int_type overflow(int_type c = traits_type::eof())
+    {
+        char z = c;
+        OutputDebugStringA(std::string(&z, 1).c_str());
+        return c;
+    }
+};
+
+DebugOutput debugOutput;
+std::ostream debugStream(&debugOutput);
+*/
+
+
 
 class DSDCC_API DSDLogger
 {
@@ -46,10 +97,12 @@ public:
             _vsnprintf_s(buffer, sizeof(buffer) / sizeof(char), _TRUNCATE, fmt, argptr);
             va_end(argptr);
 
-            //TRACE(buffer);
             OutputDebugStringA(buffer);
         }
     }
+
+    dbg_stream_for_cout g_DebugStreamFor_cout;
+    
 
 private:
     FILE *m_logfp;

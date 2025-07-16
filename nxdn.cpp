@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
 #include <iostream>
 #include "nxdn.h"
@@ -287,7 +286,8 @@ void DSDNXDN::init()
 {
     if (!m_inSync)
     {
-        std::cerr << "DSDNXDN::init: entering sync state" << std::endl;
+        //std::cerr << "DSDNXDN::init: entering sync state" << std::endl;
+        TRACE("DSDNXDN::init: entering sync state\r\n");
         m_currentMessage.reset();
         m_inSync = true;
         m_fullRate = false;
@@ -313,7 +313,8 @@ void DSDNXDN::process()
         processSwallow();
         break;
     default:
-        std::cerr << "DSDNXDN::process: unsupported state (end)" << std::endl;
+        //std::cerr << "DSDNXDN::process: unsupported state (end)" << std::endl;
+        TRACE("DSDNXDN::process: unsupported state (end)\r\n");
         m_dsdDecoder->m_voice1On = false;
         m_dsdDecoder->resetFrameSync(); // end
         m_inSync = false;
@@ -396,7 +397,8 @@ void DSDNXDN::processPostFrame()
 	}
 	else // out of sync => terminate
 	{
-        std::cerr << "DSDNXDN::processPostFrame: out of sync (end)" << std::endl;
+        //std::cerr << "DSDNXDN::processPostFrame: out of sync (end)" << std::endl;
+        TRACE("DSDNXDN::processPostFrame: out of sync (end)\r\n");
         m_dsdDecoder->m_voice1On = false;
 		m_dsdDecoder->resetFrameSync(); // end
 		m_inSync = false;
@@ -420,7 +422,8 @@ void DSDNXDN::processFSW()
         fsw = DSDSync::getPattern(DSDSync::SyncNXDNRDCHFSWInv, fswLength);
     } else
     {
-        std::cerr << "DSDNXDN::processFSW: sync inconsistent (end)" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: sync inconsistent (end)" << std::endl;
+        TRACE("DSDNXDN::processFSW: sync inconsistent (end)\r\n");
         m_dsdDecoder->m_voice1On = false;
         m_dsdDecoder->resetFrameSync(); // end
         m_inSync = false;
@@ -452,13 +455,15 @@ void DSDNXDN::processFSW()
     }
     else if (match_earl1 >= 6)
     {
-        std::cerr << "DSDNXDN::processFSW: match early -1" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: match early -1" << std::endl;
+        TRACE("DSDNXDN::processFSW: match early -1\r\n");
         m_swallowCount = 1;
         m_state = NXDNSwallow;
     }
     else if (match_late1 >= 6)
     {
-        std::cerr << "DSDNXDN::processFSW: match late +1" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: match late +1" << std::endl;
+        TRACE("DSDNXDN::processFSW: match late +1\r\n");
         m_symbolIndex = 0;
         m_lichEvenParity = 0;
         acquireLICH(unscrambleDibit(m_syncBuffer[9])); // re-introduce last symbol
@@ -467,13 +472,15 @@ void DSDNXDN::processFSW()
     }
     else if (match_earl2 >= 5)
     {
-        std::cerr << "DSDNXDN::processFSW: match early -2" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: match early -2" << std::endl;
+        TRACE("DSDNXDN::processFSW: match early -2\r\n");
         m_swallowCount = 2;
         m_state = NXDNSwallow;
     }
     else if (match_late2 >= 5)
     {
-        std::cerr << "DSDNXDN::processFSW: match late +2" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: match late +2" << std::endl;
+        TRACE("DSDNXDN::processFSW: match late +2\r\n");
         m_symbolIndex = 0;
         m_lichEvenParity = 0;
         acquireLICH(unscrambleDibit(m_syncBuffer[8])); // re-introduce symbol before last symbol
@@ -484,7 +491,8 @@ void DSDNXDN::processFSW()
     }
     else
     {
-        std::cerr << "DSDNXDN::processFSW: sync lost (end)" << std::endl;
+        //std::cerr << "DSDNXDN::processFSW: sync lost (end)" << std::endl;
+        TRACE("DSDNXDN::processFSW: sync lost (end)\r\n");
         m_dsdDecoder->m_voice1On = false;
         m_dsdDecoder->resetFrameSync(); // end
         m_inSync = false;
@@ -525,6 +533,7 @@ void DSDNXDN::processLICH()
         m_rfChannel = NXDNRFCHUnknown;
         strcpy(m_rfChannelStr, "XX");
         m_dsdDecoder->m_voice1On = false;
+        /*
         std::cerr << "DSDNXDN::processLICH: parity error" << std::endl;
         std::cerr << "DSDNXDN::processLICH:"
                 << " rfChannelCode: " << m_lich.rfChannelCode
@@ -533,6 +542,9 @@ void DSDNXDN::processLICH()
                 << " direction: " << m_lich.direction
                 << " parity: " << m_lich.parity
                 << " m_lichEvenParity: " << m_lichEvenParity << std::endl;
+        */
+        TRACE("DSDNXDN::processLICH: parity error\r\n");
+
     }
     else
     {
@@ -970,7 +982,8 @@ bool DSDNXDN::SACCH::decode()
 
     if (!CNXDNCRC::checkCRC6(m_data, 26U))
     {
-        std::cerr << "DSDNXDN::SACCH::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::SACCH::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::SACCH::decode: bad CRC\r\n");
 
         if (m_decodeCount >= 0) {
             m_decodeCount = -1;
@@ -1033,7 +1046,8 @@ bool DSDNXDN::CACOutbound::decode()
 
     if (!CNXDNCRC::checkCRC16(m_data, 155))
     {
-        std::cerr << "DSDNXDN::CACOutbound::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::CACOutbound::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::CACOutbound::decode: bad CRC\r\n");
         return false;
     }
     else
@@ -1093,12 +1107,14 @@ bool DSDNXDN::CACLong::decode()
 
     if (!CNXDNCRC::checkCRC16(m_data, 136))
     {
-        std::cerr << "DSDNXDN::CACLong::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::CACLong::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::CACLong::decode: bad CRC");
         return false;
     }
     else
     {
-        std::cerr << "DSDNXDN::CACLong::decode: CRC OK" << std::endl;
+        //std::cerr << "DSDNXDN::CACLong::decode: CRC OK" << std::endl;
+        TRACE("DSDNXDN::CACLong::decode: CRC OK\r\n");
         return true;
     }
 }
@@ -1138,12 +1154,14 @@ bool DSDNXDN::CACShort::decode()
 
     if (!CNXDNCRC::checkCRC16(m_data, 106))
     {
-        std::cerr << "DSDNXDN::CACShort::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::CACShort::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::CACShort::decode: bad CRC\r\n");
         return false;
     }
     else
     {
-        std::cerr << "DSDNXDN::CACShort::decode: CRC OK" << std::endl;
+        //std::cerr << "DSDNXDN::CACShort::decode: CRC OK" << std::endl;
+        TRACE("DSDNXDN::CACShort::decode: CRC OK\r\n");
         return true;
     }
 }
@@ -1184,7 +1202,8 @@ bool DSDNXDN::FACCH1::decode()
 
     if (!CNXDNCRC::checkCRC12(m_data, 80))
     {
-        std::cerr << "DSDNXDN::FACCH1::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::FACCH1::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::FACCH1::decode: bad CRC\r\n");
         return false;
     }
     else
@@ -1224,7 +1243,8 @@ bool DSDNXDN::UDCH::decode()
 
     if (!CNXDNCRC::checkCRC15(m_data, 184))
     {
-        std::cerr << "DSDNXDN::UDCH::decode: bad CRC" << std::endl;
+        //std::cerr << "DSDNXDN::UDCH::decode: bad CRC" << std::endl;
+        TRACE("DSDNXDN::UDCH::decode: bad CRC\r\n");
         return false;
     }
     else
@@ -1256,7 +1276,8 @@ void DSDNXDN::processVoiceFrameEHR(int symbolIndex, int dibit)
 
     if ((symbolIndex == 0) && (m_dsdDecoder->m_opts.errorbars == 1))
     {
-        m_dsdDecoder->getLogger().log("\nMBE: ");
+        //m_dsdDecoder->getLogger().log("\nMBE: ");
+        m_dsdDecoder->outputText(L"\nMBE: ");
     }
 
     if (symbolIndex % 36 == 0)
@@ -1284,7 +1305,8 @@ void DSDNXDN::processVoiceFrameEHR(int symbolIndex, int dibit)
 
         if (m_dsdDecoder->m_opts.errorbars == 1)
         {
-            m_dsdDecoder->getLogger().log(".");
+            //m_dsdDecoder->getLogger().log(".");
+            m_dsdDecoder->outputText(L".");
         }
     }
 }
@@ -1293,7 +1315,8 @@ void DSDNXDN::processVoiceFrameEFR(int symbolIndex, int dibit)
 {
     if ((symbolIndex == 0) && (m_dsdDecoder->m_opts.errorbars == 1))
     {
-        m_dsdDecoder->getLogger().log("\nMBE: ");
+        //m_dsdDecoder->getLogger().log("\nMBE: ");
+        m_dsdDecoder->outputText(L"\nMBE: ");
     }
 
     storeSymbolDV(symbolIndex % 72, dibit);
@@ -1304,7 +1327,8 @@ void DSDNXDN::processVoiceFrameEFR(int symbolIndex, int dibit)
 
         if (m_dsdDecoder->m_opts.errorbars == 1)
         {
-            m_dsdDecoder->getLogger().log(".");
+            //m_dsdDecoder->getLogger().log(".");
+            m_dsdDecoder->outputText(L".");
         }
     }
 }
@@ -1346,6 +1370,8 @@ void DSDNXDN::printAdjacentSites()
             << " site: " << (unsigned int) m_adjacentSites[i].m_siteNumber
             << " channel: " << m_adjacentSites[i].m_channelNumber
             << " location: " << std::hex << m_adjacentSites[i].m_locationId << std::endl;
+
+        m_dsdDecoder->outputText(L"SITES !!\r\n");
     }
 }
 

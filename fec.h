@@ -17,7 +17,11 @@
 #ifndef FEC_H_
 #define FEC_H_
 
+#include <sdkddkver.h>
+#include <afx.h>
+
 #include "export.h"
+
 
 namespace DSDcc
 {

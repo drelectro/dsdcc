@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
 #include <iostream>
 #include <stdlib.h>
@@ -39,8 +38,8 @@ DSDSymbol::DSDSymbol(DSDDecoder *dsdDecoder) :
         m_lmmidx(0),
         m_pllLock(true),
         m_lmmSamples(10*24),
-        m_ringingFilter(48000.0, 4800.0, 0.99),
-        m_pll(0.1, 0.003, 0.25),
+        m_ringingFilter(48000.0, 4800.0, 0.99f),
+        m_pll(0.1f, 0.003f, 0.25),
         m_binSymbolBuffer(1024),
         m_syncSymbolBuffer(64),
 		m_nonInvertedSyncSymbolBuffer(64)
@@ -125,7 +124,7 @@ bool DSDSymbol::pushSample(short sample)
             float pllOut[2];
             float pllIn = sampleRinging / 32768.0f;
             m_pll.process(pllIn, pllOut);
-            m_symbolSyncSample = pllOut[0] * 16384.0f;
+            m_symbolSyncSample = (short)(pllOut[0] * 16384.0f);
 
             // process with PLL
             if ((m_symbolSyncSample > 0) && (m_lastsample < 0))
@@ -364,36 +363,36 @@ void DSDSymbol::setSamplesPerSymbol(int samplesPerSymbol)
         memcpy(m_zeroCrossingCorrectionProfile, m_zeroCrossingCorrectionProfile9600, 11*sizeof(int));
         m_zeroCrossingSlopeDivisor = 164;
         m_lmmSamples.resize(5*24);
-        m_ringingFilter.setFrequencies(48000.0, 9600.0);
-        m_ringingFilter.setR(0.99);
-        m_pll.configure(0.2, 0.003, 0.25);
+        m_ringingFilter.setFrequencies(48000.0f, 9600.0f);
+        m_ringingFilter.setR(0.99f);
+        m_pll.configure(0.2f, 0.003f, 0.25f);
     }
     else if (m_samplesPerSymbol == 10)
     {
         memcpy(m_zeroCrossingCorrectionProfile, m_zeroCrossingCorrectionProfile4800, 11*sizeof(int));
         m_zeroCrossingSlopeDivisor = 232;
         m_lmmSamples.resize(10*24);
-        m_ringingFilter.setFrequencies(48000.0, 4800.0);
-        m_ringingFilter.setR(0.99);
-        m_pll.configure(0.1, 0.003, 0.25);
+        m_ringingFilter.setFrequencies(48000.0f, 4800.0f);
+        m_ringingFilter.setR(0.99f);
+        m_pll.configure(0.1f, 0.003f, 0.25f);
     }
     else if (m_samplesPerSymbol == 20)
     {
         memcpy(m_zeroCrossingCorrectionProfile, m_zeroCrossingCorrectionProfile2400, 11*sizeof(int));
         m_zeroCrossingSlopeDivisor = 328;
         m_lmmSamples.resize(20*24);
-        m_ringingFilter.setFrequencies(48000.0, 2400.0);
-        m_ringingFilter.setR(0.996);
-        m_pll.configure(0.05, 0.003, 0.25);
+        m_ringingFilter.setFrequencies(48000.0f, 2400.0f);
+        m_ringingFilter.setR(0.996f);
+        m_pll.configure(0.05f, 0.003f, 0.25f);
     }
     else
     {
         memcpy(m_zeroCrossingCorrectionProfile, m_zeroCrossingCorrectionProfile4800, 11*sizeof(int));
         m_zeroCrossingSlopeDivisor = 232;
         m_lmmSamples.resize(10*24);
-        m_ringingFilter.setFrequencies(48000.0, 4800.0);
-        m_ringingFilter.setR(0.99);
-        m_pll.configure(0.1, 0.003, 0.25);
+        m_ringingFilter.setFrequencies(48000.0f, 4800.0f);
+        m_ringingFilter.setR(0.99f);
+        m_pll.configure(0.1f, 0.003f, 0.25f);
     }
 }
 

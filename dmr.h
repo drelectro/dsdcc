@@ -20,7 +20,7 @@
 #include "fec.h"
 #include "export.h"
 
-#define DMR_TYPES_COUNT 12
+#define DMR_TYPES_COUNT 16
 #define DMR_SLOT_TYPE_PARITY_LEN 12
 
 #define DMR_TS_LEN 288              //!< Length of 30ms frame in bits

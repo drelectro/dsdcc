@@ -43,6 +43,7 @@ public:
     int lastp25type;
     int offset;
     int carrier;
+    int inlvl;
     char tg[25][16];
     int tgcount;
     int lasttg;

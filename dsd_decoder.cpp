@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -131,48 +130,48 @@ void DSDDecoder::setDecodeMode(DSDDecodeMode mode, bool on)
         break;
     case DSDDecodeDMR:
         m_opts.frame_dmr = (on ? 1 : 0);
-        if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of DMR/MOTOTRBO frames.\n", (on ? "Enabling" : "Disabling"));
+        //if (on) setDataRate(DSDRate4800);
+        TRACE("%s the decoding of DMR/MOTOTRBO frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeDStar:
         m_opts.frame_dstar = (on ? 1 : 0);
         if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of D-Star frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of D-Star frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeP25P1:
         m_opts.frame_p25p1 = (on ? 1 : 0);
         if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of P25p1 frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of P25p1 frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeDPMR:
         m_opts.frame_dpmr = (on ? 1 : 0);
         if (on) setDataRate(DSDRate2400); else setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of DPMR Tier 1 or 2 frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of DPMR Tier 1 or 2 frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeNXDN48:
         m_opts.frame_nxdn48 = (on ? 1 : 0);
         if (on) setDataRate(DSDRate2400); else setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of NXDN48 frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of NXDN48 frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeNXDN96:
         m_opts.frame_nxdn96 = (on ? 1 : 0);
         if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of NXDN96 frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of NXDN96 frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeProVoice:
         m_opts.frame_provoice = (on ? 1 : 0);
         if (on) setDataRate(DSDRate9600); else setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of Pro Voice frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of Pro Voice frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeX2TDMA:
         m_opts.frame_x2tdma = (on ? 1 : 0);
         if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of X2 TDMA frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of X2 TDMA frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeYSF:
         m_opts.frame_ysf = (on ? 1 : 0);
         if (on) setDataRate(DSDRate4800);
-        m_dsdLogger.log("%s the decoding of YSF frames.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s the decoding of YSF frames.\n", (on ? "Enabling" : "Disabling"));
         break;
     case DSDDecodeAuto:
         m_opts.frame_dmr = 0;
@@ -210,7 +209,7 @@ void DSDDecoder::setDecodeMode(DSDDecodeMode mode, bool on)
             m_opts.frame_ysf = (on ? 1 : 0);
             break;
         }
-        m_dsdLogger.log("%s auto frame decoding.\n", (on ? "Enabling" : "Disabling"));
+        TRACE("%s auto frame decoding.\n", (on ? "Enabling" : "Disabling"));
         break;
     default:
         break;
@@ -228,11 +227,11 @@ void DSDDecoder::setAudioGain(float gain)
 
     if (m_opts.audio_gain < 0.0f)
     {
-        m_dsdLogger.log("Audio out gain invalid\n");
+        TRACE("Audio out gain invalid\n");
     }
     else if (m_opts.audio_gain == 0.0f)
     {
-        m_dsdLogger.log("Enabling audio out auto-gain\n");
+        TRACE("Enabling audio out auto-gain\n");
         m_mbeDecoder1.setAudioGain(25);
         m_mbeDecoder1.setVolume(1.0f);
         m_mbeDecoder1.setAutoGain(true);
@@ -242,7 +241,7 @@ void DSDDecoder::setAudioGain(float gain)
     }
     else
     {
-        m_dsdLogger.log("Setting audio out gain to %f\n", m_opts.audio_gain);
+        TRACE("Setting audio out gain to %f\n", m_opts.audio_gain);
         m_mbeDecoder1.setAudioGain(m_opts.audio_gain);
         m_mbeDecoder1.setVolume(m_opts.audio_gain);
         m_mbeDecoder1.setAutoGain(false);
@@ -262,7 +261,7 @@ void DSDDecoder::setUvQuality(int uvquality)
         m_opts.uvquality = 64;
     }
 
-    m_dsdLogger.log("Setting unvoice speech quality to %i waves per band.\n", m_opts.uvquality);
+    TRACE("Setting unvoice speech quality to %i waves per band.\n", m_opts.uvquality);
 }
 
 void DSDDecoder::setUpsampling(int upsampling)
@@ -277,7 +276,7 @@ void DSDDecoder::setUpsampling(int upsampling)
 
     m_mbeDecoder1.setUpsamplingFactor(upsampling);
     m_mbeDecoder2.setUpsamplingFactor(upsampling);
-    m_dsdLogger.log("Setting upsampling to x%d\n", upsampling);
+    TRACE("Setting upsampling to x%d\n", upsampling);
 }
 
 void DSDDecoder::setStereo(bool on)
@@ -289,25 +288,25 @@ void DSDDecoder::setStereo(bool on)
 void DSDDecoder::setInvertedXTDMA(bool on)
 {
     m_opts.inverted_x2tdma = (on ? 1 : 0);
-    m_dsdLogger.log("Expecting %sinverted X2-TDMA signals.\n", (m_opts.inverted_x2tdma == 0 ? "non-" : ""));
+    TRACE("Expecting %sinverted X2-TDMA signals.\n", (m_opts.inverted_x2tdma == 0 ? "non-" : ""));
 }
 
 void DSDDecoder::enableCosineFiltering(bool on)
 {
     m_opts.use_cosine_filter = (on ? 1 : 0);
-    m_dsdLogger.log("%s cosine filter.\n", (on ? "Enabling" : "Disabling"));
+    TRACE("%s cosine filter.\n", (on ? "Enabling" : "Disabling"));
 }
 
 void DSDDecoder::enableAudioOut(bool on)
 {
     m_opts.audio_out = (on ? 1 : 0);
-    m_dsdLogger.log("%s audio output to soundcard.\n", (on ? "Enabling" : "Disabling"));
+    TRACE("%s audio output to soundcard.\n", (on ? "Enabling" : "Disabling"));
 }
 
 void DSDDecoder::enableScanResumeAfterTDULCFrames(int nbFrames)
 {
     m_opts.resume = nbFrames;
-    m_dsdLogger.log("Enabling scan resume after %i TDULC frames\n", m_opts.resume);
+    TRACE("Enabling scan resume after %i TDULC frames\n", m_opts.resume);
 }
 
 void DSDDecoder::setDataRate(DSDRate dataRate)
@@ -317,19 +316,19 @@ void DSDDecoder::setDataRate(DSDRate dataRate)
     switch(dataRate)
     {
     case DSDRate2400:
-        m_dsdLogger.log("Set data rate to 2400 bauds. 20 samples per symbol\n");
+        TRACE("Set data rate to 2400 bauds. 20 samples per symbol\n");
         m_dsdSymbol.setSamplesPerSymbol(20);
         break;
     case DSDRate4800:
-        m_dsdLogger.log("Set data rate to 4800 bauds. 10 samples per symbol\n");
+        TRACE("Set data rate to 4800 bauds. 10 samples per symbol\n");
         m_dsdSymbol.setSamplesPerSymbol(10);
         break;
     case DSDRate9600:
-        m_dsdLogger.log("Set data rate to 9600 bauds. 5 samples per symbol\n");
+        TRACE("Set data rate to 9600 bauds. 5 samples per symbol\n");
         m_dsdSymbol.setSamplesPerSymbol(5);
         break;
     default:
-        m_dsdLogger.log("Set default data rate to 4800 bauds. 10 samples per symbol\n");
+        TRACE("Set default data rate to 4800 bauds. 10 samples per symbol\n");
         m_dsdSymbol.setSamplesPerSymbol(10);
         break;
     }
@@ -348,7 +347,7 @@ void DSDDecoder::run(short sample)
             }
             else
             {
-                m_dsdLogger.log("DSDDecoder::run: squelch time out go back to sync search\n");
+                TRACE("DSDDecoder::run: squelch time out go back to sync search\n");
                 resetFrameSync();
                 m_squelchTimeoutCount = 0;
             }
@@ -372,19 +371,19 @@ void DSDDecoder::run(short sample)
             }
             else if (m_sync == -1) // -1 means sync has been found but is invalid
             {
-                m_dsdLogger.log("DSDDecoder::run: invalid sync found: %d symbol %d (%d)\n", m_sync, m_state.symbolcnt, m_dsdSymbol.getSymbol());
+                //TRACE("DSDDecoder::run: invalid sync found: %d symbol %d (%d)\n", m_sync, m_state.symbolcnt, m_dsdSymbol.getSymbol());
                 resetFrameSync(); // go back searching
             }
             else // good sync found
             {
-                m_dsdLogger.log("DSDDecoder::run: good sync found: %d symbol %d (%d)\n", m_sync, m_state.symbolcnt, m_dsdSymbol.getSymbol());
+                //TRACE("DSDDecoder::run: good sync found: %d symbol %d (%d)\r\n", m_sync, m_state.symbolcnt, m_dsdSymbol.getSymbol());
                 m_fsmState = DSDSyncFound; // go to processing state next time
             }
 
             break; // next
         case DSDSyncFound:
             m_syncType  = (DSDSyncType) m_sync;
-            m_dsdLogger.log("DSDDecoder::run: before processFrameInit: symbol %d (%d)\n", m_state.symbolcnt, m_dsdSymbol.getSymbol());
+            //TRACE("DSDDecoder::run: before processFrameInit: symbol %d (%d)\n", m_state.symbolcnt, m_dsdSymbol.getSymbol());
             processFrameInit();   // initiate the process of the frame which sync has been found. This will change FSM state
             break;
         case DSDprocessDMRvoice:
@@ -437,10 +436,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                m_dsdLogger.log("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -466,10 +465,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                m_dsdLogger.log("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -496,10 +495,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                printf("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -517,10 +516,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                m_dsdLogger.log("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -538,10 +537,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                printf("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -559,10 +558,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                m_dsdLogger.log("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -580,10 +579,10 @@ void DSDDecoder::processFrameInit()
 
         if (m_opts.errorbars == 1)
         {
-            if (m_opts.verbose > 0)
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
             {
-                int level = m_dsdSymbol.getLevel();
-                m_dsdLogger.log("inlvl: %2i%% ", level);
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
             }
         }
 
@@ -654,7 +653,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +P25p1    ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncP25p1P)
+                        printFrameSync(" +P25p1    ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncP25p1P;
@@ -670,7 +670,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" -P25p1    ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncP25p1N)
+                        printFrameSync(" -P25p1    ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncP25p1N;
@@ -690,7 +691,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncX2TDMADataP)
+                        printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncX2TDMADataP;
@@ -708,7 +710,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncX2TDMADataP)
+                        printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncX2TDMADataP;
@@ -726,7 +729,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncX2TDMAVoiceP)
+                        printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncX2TDMAVoiceP;
@@ -744,7 +748,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncX2TDMAVoiceP)
+                        printFrameSync(" +X2-TDMA  ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncX2TDMAVoiceP;
@@ -763,7 +768,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync("+YSF       ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncYSF)
+                        printFrameSync("+YSF       ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncYSF;
@@ -786,7 +792,8 @@ int DSDDecoder::getFrameSync()
 
 				if (m_opts.errorbars == 1)
 				{
-					printFrameSync(" +DMRd     ",  m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDMRDataP)
+					    printFrameSync(" +DMRd     ",  m_synctest_pos + 1);
 				}
 
 				m_lastSyncType = DSDSyncDMRDataP;
@@ -807,7 +814,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +DMRd     ",  m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDMRDataMS)
+                        printFrameSync(" +DMRd     ",  m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDMRDataMS;
@@ -828,7 +836,8 @@ int DSDDecoder::getFrameSync()
 
 				if (m_opts.errorbars == 1)
 				{
-					printFrameSync(" +DMRv     ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDMRVoiceP)
+					    printFrameSync(" +DMRv     ", m_synctest_pos + 1);
 				}
 
 				m_lastSyncType = DSDSyncDMRVoiceP;
@@ -849,7 +858,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +DMRv     ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDMRVoiceMS)
+                        printFrameSync(" +DMRv     ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDMRVoiceMS;
@@ -868,7 +878,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +ProVoice ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncProVoiceP)
+                        printFrameSync(" +ProVoice ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncProVoiceP;
@@ -885,7 +896,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" -ProVoice ",  m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncProVoiceN)
+                        printFrameSync(" -ProVoice ",  m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncProVoiceN;
@@ -908,7 +920,8 @@ int DSDDecoder::getFrameSync()
 
 					if (m_opts.errorbars == 1)
 					{
-						printFrameSync(" +NXDN48   ", m_synctest_pos + 1);
+                        if (m_lastSyncType != DSDSyncNXDNP)
+						    printFrameSync(" +NXDN48   ", m_synctest_pos + 1);
 					}
 				}
 				else
@@ -917,7 +930,8 @@ int DSDDecoder::getFrameSync()
 
 					if (m_opts.errorbars == 1)
 					{
-						printFrameSync(" +NXDN96   ", m_synctest_pos + 1);
+                        if (m_lastSyncType != DSDSyncNXDNP)
+						    printFrameSync(" +NXDN96   ", m_synctest_pos + 1);
 					}
 				}
 
@@ -937,7 +951,8 @@ int DSDDecoder::getFrameSync()
 
 					if (m_opts.errorbars == 1)
 					{
-						printFrameSync(" -NXDN48   ", m_synctest_pos + 1);
+                        if (m_lastSyncType != DSDSyncNXDNN)
+						    printFrameSync(" -NXDN48   ", m_synctest_pos + 1);
 					}
 				}
 				else
@@ -946,7 +961,8 @@ int DSDDecoder::getFrameSync()
 
 					if (m_opts.errorbars == 1)
 					{
-						printFrameSync(" -NXDN96   ", m_synctest_pos + 1);
+                        if (m_lastSyncType != DSDSyncNXDNN)
+						    printFrameSync(" -NXDN96   ", m_synctest_pos + 1);
 					}
 				}
 
@@ -967,7 +983,8 @@ int DSDDecoder::getFrameSync()
 
                         if (m_opts.errorbars == 1)
                         {
-                            printFrameSync(" +NXDN48   ", m_synctest_pos + 1);
+                            if (m_lastSyncType != DSDSyncNXDNP)
+                                printFrameSync(" +NXDN48   ", m_synctest_pos + 1);
                         }
                     }
                     else
@@ -976,7 +993,8 @@ int DSDDecoder::getFrameSync()
 
                         if (m_opts.errorbars == 1)
                         {
-                            printFrameSync(" +NXDN96   ", m_synctest_pos + 1);
+                            if (m_lastSyncType != DSDSyncNXDNP)
+                                printFrameSync(" +NXDN96   ", m_synctest_pos + 1);
                         }
                     }
 
@@ -1001,7 +1019,8 @@ int DSDDecoder::getFrameSync()
 
                         if (m_opts.errorbars == 1)
                         {
-                            printFrameSync(" -NXDN48   ", m_synctest_pos + 1);
+                            if (m_lastSyncType != DSDSyncNXDNN)
+                                printFrameSync(" -NXDN48   ", m_synctest_pos + 1);
                         }
                     }
                     else
@@ -1010,7 +1029,8 @@ int DSDDecoder::getFrameSync()
 
                         if (m_opts.errorbars == 1)
                         {
-                            printFrameSync(" -NXDN96   ", m_synctest_pos + 1);
+                            if(m_lastSyncType != DSDSyncNXDNN)
+                                printFrameSync(" -NXDN96   ", m_synctest_pos + 1);
                         }
                     }
 
@@ -1034,7 +1054,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync("+dPMR      ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDPMR)
+                        printFrameSync("+dPMR      ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDPMR;
@@ -1053,7 +1074,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +D-STAR   ",  m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDStarP)
+                        printFrameSync(" +D-STAR   ",  m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDStarP;
@@ -1069,7 +1091,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" -D-STAR   ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDStarN)
+                        printFrameSync(" -D-STAR   ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDStarN;
@@ -1085,7 +1108,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" +D-STAR_HD   ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDStarHeaderP)
+                        printFrameSync(" +D-STAR_HD   ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDStarHeaderP;
@@ -1101,7 +1125,8 @@ int DSDDecoder::getFrameSync()
 
                 if (m_opts.errorbars == 1)
                 {
-                    printFrameSync(" -D-STAR_HD   ", m_synctest_pos + 1);
+                    if (m_lastSyncType != DSDSyncDStarHeaderN)
+                        printFrameSync(" -D-STAR_HD   ", m_synctest_pos + 1);
                 }
 
                 m_lastSyncType = DSDSyncDStarHeaderN;
@@ -1122,7 +1147,7 @@ int DSDDecoder::getFrameSync()
         if ((m_opts.errorbars == 1) && (m_opts.verbose > 1)
                 && (m_state.carrier == 1))
         {
-            m_dsdLogger.log("Sync: no sync\n");
+            TRACE("Sync: no sync\n");
         }
 
         sprintf(m_state.ftype, "No Sync      ");
@@ -1135,7 +1160,7 @@ int DSDDecoder::getFrameSync()
 
 void DSDDecoder::resetFrameSync()
 {
-    m_dsdLogger.log("DSDDecoder::resetFrameSync: symbol %d (%d)\n", m_state.symbolcnt, m_dsdSymbol.getSymbol());
+    //TRACE("DSDDecoder::resetFrameSync: symbol %d (%d)\n", m_state.symbolcnt, m_dsdSymbol.getSymbol());
 
     // reset detect frame sync engine
     m_t = 0;
@@ -1145,7 +1170,7 @@ void DSDDecoder::resetFrameSync()
 
     if ((m_opts.symboltiming == 1) && (m_state.carrier == 1))
     {
-        m_dsdLogger.log("\nSymbol Timing:\n");
+        TRACE("\nSymbol Timing:\n");
     }
 
 
@@ -1157,11 +1182,11 @@ void DSDDecoder::printFrameSync(const char *frametype, int offset)
 {
     if (m_opts.verbose > 0)
     {
-        m_dsdLogger.log("Sync: %s ", frametype);
+        TRACE("Sync: %s \r\n", frametype);
     }
-    if (m_opts.verbose > 2)
+    else if (m_opts.verbose > 2)
     {
-        m_dsdLogger.log("o: %4i ", offset);
+        TRACE("Sync: %s o: %4i\r\n", frametype, offset);
     }
 }
 
@@ -1220,19 +1245,19 @@ void DSDDecoder::printFrameInfo()
 
     if (m_opts.verbose > 0)
     {
-        m_dsdLogger.log("inlvl: %2i%% ", level);
+        TRACE("inlvl: %2i%% ", level);
     }
     if (m_state.nac != 0)
     {
-        m_dsdLogger.log("nac: %4X ", m_state.nac);
+        TRACE("nac: %4X ", m_state.nac);
     }
 
     if (m_opts.verbose > 1)
     {
-        m_dsdLogger.log("src: %8i ", m_state.lastsrc);
+        TRACE("src: %8i ", m_state.lastsrc);
     }
 
-    m_dsdLogger.log("tg: %5i ", m_state.lasttg);
+    TRACE("tg: %5i ", m_state.lasttg);
 }
 
 void DSDDecoder::formatStatusText(char *statusText)
@@ -1440,6 +1465,12 @@ int DSDDecoder::comp(const void *a, const void *b)
         return -1;
     else
         return 1;
+}
+
+void DSDDecoder::outputText(CString text)
+{
+    // TODO: Send to sink
+    theApp.LogTextToRXView(text);
 }
 
 } // namespace dsdcc

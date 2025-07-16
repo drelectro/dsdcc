@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
 #include <iostream>
 #include <string.h>
@@ -764,7 +763,12 @@ bool Golay_20_8::decode(unsigned char *rxBits)
             }
             else
             {
-                rxBits[m_corr[syndromeI][i]] ^= 1; // flip bit
+                int x = m_corr[syndromeI][i];
+                if (x > 19) {
+                    TRACE("ECC: %d\r\n", x);
+                }
+                else
+                    rxBits[m_corr[syndromeI][i]] ^= 1; // flip bit
             }
         }
 

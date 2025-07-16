@@ -18,7 +18,7 @@
     See gpl.txt for the details of the licensing terms.
 
  */
-#include "pch.h"
+//#include "pch.h"
 
 #include <cctype> // for toupper
 #include <algorithm>

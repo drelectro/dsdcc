@@ -21,7 +21,8 @@
 #include "export.h"
 
 extern "C" {
-#include <mbelib.h>
+//#include <mbelib.h>
+#include "..\mbelib\mbelib.h"
 }
 
 namespace DSDcc

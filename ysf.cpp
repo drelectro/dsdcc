@@ -13,9 +13,7 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
-#include "ysf.h"
 #include "dsd_decoder.h"
 #include "mbefec.h"
 
@@ -339,7 +337,7 @@ void DSDYSF::processFICH(int symbolIndex, unsigned char dibit)
             if (checkCRC16(m_fichBits, 4))
             {
                 m_fich.setBytes(m_fichBits);
-//                std::cerr << "DSDYSF::processFICH: CRC OK: " << m_fich << std::endl;
+                std::cerr << "DSDYSF::processFICH: CRC OK: " << m_fich << std::endl;
                 m_fichError = FICHNoError;
             }
             else
@@ -438,7 +436,7 @@ void DSDYSF::processCSD1(unsigned char *dchBytes)
         m_dest[10] = '\0';
         memcpy(m_src, &dchBytes[10], 10);
         m_src[10] = '\0';
-//        std::cerr << "DSDYSF::processCSD1: Dest: " << m_dest << " Src: " << m_src << std::endl;
+        std::cerr << "DSDYSF::processCSD1: Dest: " << m_dest << " Src: " << m_src << std::endl;
     }
 }
 
@@ -448,7 +446,7 @@ void DSDYSF::processCSD2(unsigned char *dchBytes)
     m_downlink[10] = '\0';
     memcpy(m_uplink, &dchBytes[10], 10);
     m_uplink[10] = '\0';
-//    std::cerr << "DSDYSF::processCSD2:  D/L: " << m_downlink << " U/L: " << m_uplink << std::endl;
+    std::cerr << "DSDYSF::processCSD2:  D/L: " << m_downlink << " U/L: " << m_uplink << std::endl;
 }
 
 void DSDYSF::processCSD3_1(unsigned char *dchBytes)
@@ -467,8 +465,8 @@ void DSDYSF::processCSD3_2(unsigned char *dchBytes)
     m_rem3[5] = '\0';
     memcpy(m_rem4, &dchBytes[5], 5);
     m_rem4[5] = '\0';
-//    std::cerr << "DSDYSF::processCSD3_2: Rem3: " << m_rem3 << std::endl;
-//    std::cerr << "DSDYSF::processCSD3_2: Rem4: " << m_rem4 << std::endl;
+    std::cerr << "DSDYSF::processCSD3_2: Rem3: " << m_rem3 << std::endl;
+    std::cerr << "DSDYSF::processCSD3_2: Rem4: " << m_rem4 << std::endl;
 }
 
 void DSDYSF::processVD1(int symbolIndex, unsigned char dibit)
@@ -592,22 +590,22 @@ void DSDYSF::processVD2(int symbolIndex, unsigned char dibit)
                 case 0:
                     memcpy(m_dest, bytes, 10);
                     m_dest[10] = '\0';
-//                    std::cerr << "DSDYSF::processVD2: Dest: " << m_dest << std::endl;
+                    std::cerr << "DSDYSF::processVD2: Dest: " << m_dest << std::endl;
                     break;
                 case 1:
                     memcpy(m_src, bytes, 10);
                     m_src[10] = '\0';
-//                    std::cerr << "DSDYSF::processVD2:  Src: " << m_src << std::endl;
+                    std::cerr << "DSDYSF::processVD2:  Src: " << m_src << std::endl;
                     break;
                 case 2:
                     memcpy(m_downlink, bytes, 10);
                     m_downlink[10] = '\0';
-//                    std::cerr << "DSDYSF::processVD2:  D/L: " << m_downlink << std::endl;
+                    std::cerr << "DSDYSF::processVD2:  D/L: " << m_downlink << std::endl;
                     break;
                 case 3:
                     memcpy(m_uplink, bytes, 10);
                     m_uplink[10] = '\0';
-//                    std::cerr << "DSDYSF::processVD2:  U/L: " << m_uplink << std::endl;
+                    std::cerr << "DSDYSF::processVD2:  U/L: " << m_uplink << std::endl;
                     break;
                 case 4:
                     processCSD3_1(bytes);
@@ -703,7 +701,7 @@ void DSDYSF::processVFRSubHeader(int symbolIndex, unsigned char dibit)
 
         if (symbolIndex == 5*36 - 1)
         {
-//            std::cerr << "DSDYSF::processVFRSubHeader: CSD3" << std::endl;
+            std::cerr << "DSDYSF::processVFRSubHeader: CSD3" << std::endl;
 
             unsigned char bytes[22];
 

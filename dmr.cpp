@@ -58,7 +58,11 @@ const char *DSDDMR::m_slotTypeText[DMR_TYPES_COUNT] = {
         "D34",
         "IDL",
         "D01",
-        "USB"
+        "USB",
+        "RSV",
+        "RSV",
+        "RSV",
+        "RSV"
 };
 
 /*
@@ -585,10 +589,10 @@ void DSDDMR::processDataDibit(unsigned char dibit)
             {
                 decodeCACH(m_cachBits);
 
-    //            std::cerr << "DSDDMR::processDataDibit: start frame:"
-    //                    << " slot: " << (int) m_slot
-    //                    << " VC1: " << m_voice1FrameCount
-    //                    << " VC2: " << m_voice2FrameCount << std::endl;
+                //std::cerr << "DSDDMR::processDataDibit: start frame:"
+                //        << " slot: " << (int) m_slot
+                //        << " VC1: " << m_voice1FrameCount
+                //        << " VC2: " << m_voice2FrameCount << std::endl;
             }
         }
         return;
@@ -1007,12 +1011,13 @@ void DSDDMR::processSlotTypePDU()
             memcpy(&m_slotText[4], m_slotTypeText[dataType], 3);
         }
 
-//        std::cerr << "DSDDMR::processSlotTypePDU OK: CC: " << (int) m_colorCode << " DT: " << dataType << std::endl;
+        //std::cerr << "DSDDMR::processSlotTypePDU OK: CC: " << (int) m_colorCode << " DT: " << dataType << std::endl;
+        //TRACE("DT: %s\r\n", m_slotText);
     }
     else
     {
         memcpy(&m_slotText[1], "-- UNK", 6);
-//        std::cerr << "DSDDMR::processSlotTypePDU KO" << std::endl;
+        //std::cerr << "DSDDMR::processSlotTypePDU KO" << std::endl;
     }
 }
 
@@ -1090,7 +1095,9 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
                         + (voiceEmbSigRawBits[5] << 2)
                         + (voiceEmbSigRawBits[6] << 1)
                         + (voiceEmbSigRawBits[7]);
+
                 addresses.m_group = (flco == 0);
+
                 addresses.m_target = (voiceEmbSigRawBits[16*2 + 2] << 23) // (LC47)
                         + (voiceEmbSigRawBits[16*2 + 3] << 22)
                         + (voiceEmbSigRawBits[16*2 + 4] << 21)

@@ -17,6 +17,9 @@
 #ifndef DSDCC_DSD_DECODER_H_
 #define DSDCC_DSD_DECODER_H_
 
+#include <sdkddkver.h>
+#include <afx.h>
+
 #include "dsd_opts.h"
 #include "dsd_state.h"
 #include "dsd_logger.h"
@@ -205,7 +208,7 @@ public:
     }
 
     //DSDOpts *getOpts() { return &m_opts; }
-    //DSDState *getState() { return &m_state; }
+    DSDState *getState() { return &m_state; }
 
     void setLogVerbosity(int verbosity) { m_dsdLogger.setVerbosity(verbosity); }
     void setLogFile(const char *filename) { m_dsdLogger.setFile(filename); }
@@ -270,6 +273,8 @@ public:
         m_mbeDecoder1.useHP(useHP);
         m_mbeDecoder2.useHP(useHP);
     }
+
+    void outputText(CString text);
 
 private:
     typedef enum

@@ -13,12 +13,13 @@
 // You should have received a copy of the GNU General Public License             //
 // along with this program. If not, see <http://www.gnu.org/licenses/>.          //
 ///////////////////////////////////////////////////////////////////////////////////
-#include "pch.h"
 
 #include <string.h>
 #include <math.h>
 #include "dsd_mbe.h"
 #include "dsd_decoder.h"
+
+#define DSD_USE_MBELIB
 
 #ifdef DSD_USE_MBELIB
 #include "dsd_mbelib.h"
@@ -120,7 +121,10 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
 
     if (m_dsdDecoder->m_opts.errorbars == 1)
     {
-        m_dsdDecoder->getLogger().log("%s", m_err_str);
+        //m_dsdDecoder->getLogger().log("%s", m_err_str);
+        CString s(m_err_str);
+        //s.Format(L"%s", );
+        m_dsdDecoder->outputText(s);
     }
 
     processAudio();
