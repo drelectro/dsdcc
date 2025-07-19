@@ -30,8 +30,10 @@
 #include "dpmr.h"
 #include "dstar.h"
 #include "nxdn.h"
+#include "p25p1.h"
 #include "locator.h"
 #include "export.h"
+
 
 #define DSD_SQUELCH_TIMEOUT_SAMPLES 960 // 200ms timeout after return to sync search
 
@@ -48,6 +50,7 @@ class DSDCC_API DSDDecoder
     friend class DSDYSF;
     friend class DSDdPMR;
     friend class DSDNXDN;
+    friend class DSDP25P1; 
 public:
     typedef enum
     {
@@ -100,6 +103,8 @@ public:
         DSDprocessYSF,
         DSDprocessDPMR,
 		DSDprocessNXDN,
+        DSDprocessP25p1,
+        DSDprocessP25p1HD,
         DSDprocessUnknown
     } DSDFSMState;
 
@@ -239,6 +244,7 @@ public:
     const DSDdPMR& getDPMRDecoder() const { return m_dsdDPMR; }
     const DSDYSF& getYSFDecoder() const { return m_dsdYSF; }
     const DSDNXDN& getNXDNDecoder() const { return m_dsdNXDN; }
+    const DSDP25P1& getP25Decoder() const { return m_dsdP25P1; }
     void enableMbelib(bool enable) { m_mbelibEnable = enable; }
 
     // Initializations:
@@ -284,7 +290,8 @@ private:
         signalFormatDStar,
         signalFormatDPMR,
         signalFormatYSF,
-        signalFormatNXDN
+        signalFormatNXDN,
+        signalFormatP25
     } SignalFormat;
 
     int getFrameSync();
@@ -333,6 +340,7 @@ private:
     DSDYSF m_dsdYSF;
     DSDdPMR m_dsdDPMR;
     DSDNXDN m_dsdNXDN;
+    DSDP25P1 m_dsdP25P1;
     DSDRate m_dataRate;
     DSDSyncType m_syncType;
     DSDSyncType m_lastSyncType;

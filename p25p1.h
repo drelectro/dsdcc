@@ -54,6 +54,23 @@ public:
         P25P1StateFramePayload
     } P25P1State;
 
+    // Structures
+    struct TSBK
+    {
+        TSBK() :
+            opcode(0),
+            mfId(0),
+            args{ 0 },
+            crc(0)
+        {
+        }
+        unsigned char opcode;   //!< TSBK Last block (1 bit) Protetcted (1 bit) opcode (6 bits)
+        unsigned char mfId;     //!< Manufacturer ID (8 bits)
+        unsigned char args[8];  //!< Arguments (64 bits total)
+        unsigned short crc;     //!< CRC-16 (16 bits)
+    };
+
+
     DSDP25P1(DSDDecoder *dsdDecoder);
     ~DSDP25P1();
 
@@ -85,19 +102,27 @@ private:
     void processLCFrame();
     void processStatusFrame();
     void processESFrame();
+
+    void processTSBKOpcode(TSBK& tsbk);
+    void processNetworkStatusBroadcast(TSBK& tsbk);
     
     void extractIMBE(unsigned char* imbeFrame, int frameIndex);
     void extractLinkControl();
     void extractStatusSymbols();
     void extractEncryptionSync();
     
+    bool decodeBCH_63_16_5(unsigned char* data);
     bool decodeHamming_10_6_3(unsigned char* data);
     bool decodeGolay_24_12_8(unsigned char* data);
     bool decodeReedSolomon_24_12_13(unsigned char* data, int blocks);
     bool decodeTrellis_3_4(unsigned char* data, int length);
+    bool decodeTrellis_1_2(); 
     
     void storeAnalogSignal(int value, int dibit);
     void processHeuristics();
+
+    int count_bits(unsigned int n);
+    int find_min(uint8_t list[], int len);
 
     DSDDecoder *m_dsdDecoder;
     
@@ -108,6 +133,8 @@ private:
     int m_frameIndex;
     bool m_encrypted;
     bool m_emergency;
+	int _symbolsExpected;        // Number of dibits to acquire before next processing step
+	int _statusIndex;            // Index for status symbol removal and processing   
     
     // P25 identifiers
     unsigned int m_nac;          // Network Access Code
@@ -124,6 +151,8 @@ private:
     unsigned char m_esData[4];
     unsigned char m_rsData[24];
     unsigned char m_statusData[18];
+	unsigned char _deinterleavedDibits[98];  
+	unsigned char _frameData[128];   
     
     // Voice data
     unsigned char m_imbeFrame[18][11];  // 18 voice frames per LDU
@@ -133,9 +162,11 @@ private:
     DSDP25Heuristics::AnalogSignal m_analogSignalArray[400];
     int m_analogSignalIndex;
     Hamming_10_6_3 m_hamming_10_6_3;
+    BCH_63_16_5 m_bch_63_16_5;
     Golay_24_12_8 m_golay_24_12_8;
     ReedSolomon_24_12_13 m_reedSolomon_24_12_13;
     Viterbi m_viterbi_3_4;
+    Viterbi m_viterbi_1_2;  
     CRC m_crcP25;
     
     // Constants
@@ -143,6 +174,11 @@ private:
     static const int m_statusMap[18];
     static const int m_lcMap[12];
     static const int m_esMap[4];
+	static const unsigned int _dataPktMap[98];  //!< Deinterleave table for data and TSBK frames, ref BAAA 7.2
+
+    
+    
+
 };
 
 } // namespace DSDcc

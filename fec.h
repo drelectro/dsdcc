@@ -154,6 +154,53 @@ private:
 	static const unsigned char m_H[16*9];  //!< Parity check matrix of bits
 };
 
+class DSDCC_API Hamming_10_6_3
+{
+public:
+    Hamming_10_6_3();
+    ~Hamming_10_6_3();
+
+    void init();
+    void encode(unsigned char *origBits, unsigned char *encodedBits);
+    bool decode(unsigned char *rxBits);
+
+private:
+    unsigned char m_corr[16];              //!< single bit error correction by syndrome index
+    static const unsigned char m_G[10*6]; //!< Generator matrix of bits
+    static const unsigned char m_H[10*4]; //!< Parity check matrix of bits
+};
+
+class DSDCC_API Golay_24_12_8
+{
+public:
+    Golay_24_12_8();
+    ~Golay_24_12_8();
+
+    void init();
+    void encode(unsigned char *origBits, unsigned char *encodedBits);
+    bool decode(unsigned char *rxBits);
+
+private:
+    unsigned char m_corr[4096][8];         //!< up to 8 bit error correction by syndrome index
+    static const unsigned char m_G[24*12]; //!< Generator matrix of bits
+    static const unsigned char m_H[24*12]; //!< Parity check matrix of bits
+};
+
+class DSDCC_API BCH_63_16_5
+{
+public:
+    BCH_63_16_5();
+    ~BCH_63_16_5();
+
+    void init();
+    bool decode(unsigned char *rxBits); // For shortened (8,4) version
+
+private:
+    static const unsigned char m_poly; // BCH generator polynomial
+    unsigned int calculateSyndrome(unsigned char *data);
+    bool correctErrors(unsigned char *data, unsigned int syndrome);
+};
+
 } // namespace DSDcc
 
 

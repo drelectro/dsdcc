@@ -588,7 +588,7 @@ void DSDDstar::processDPRS()
             if (m_dprs.matchDSTAR(m_slowData.gpsNMEA))
             {
                 m_dprs.m_locPoint.getLocator().toCSting(m_slowData.locator);
-                m_slowData.bearing = m_dsdDecoder->m_myPoint.bearingTo(m_dprs.m_locPoint);
+                m_slowData.bearing = static_cast<int>(m_dsdDecoder->m_myPoint.bearingTo(m_dprs.m_locPoint));
                 m_slowData.distance = m_dsdDecoder->m_myPoint.distanceTo(m_dprs.m_locPoint);
 //                std::cerr << "DSDDstar::processDPRS: " << m_dprs.lat << ":" << m_dprs.lon << ":" <<  m_dprs.m_locator.toString() << std::endl;
             }
@@ -625,7 +625,7 @@ bool DSDDstar::DPRS::matchDSTAR(const char *d)
         x = atof(latStr);
         x /= 100.0f;
         min = modf(x, &deg);
-        m_lat = (deg + ((min*100.0f)/60.0f))*(latH == 'N' ? 1 : -1);
+        m_lat = static_cast<float>((deg + ((min*100.0f)/60.0f))*(latH == 'N' ? 1 : -1));
 
         pch += 9;
 
@@ -635,7 +635,7 @@ bool DSDDstar::DPRS::matchDSTAR(const char *d)
         x = atof(lonStr);
         x /= 100.0f;
         min = modf(x, &deg);
-        m_lon = (deg + ((min*100.0f)/60.0f))*(lonH == 'E' ? 1 : -1);
+        m_lon = static_cast<float>((deg + ((min*100.0f)/60.0f))*(lonH == 'E' ? 1 : -1));
 
         m_locPoint.setLatLon(m_lat, m_lon);
 

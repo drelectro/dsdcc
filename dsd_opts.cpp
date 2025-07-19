@@ -37,11 +37,11 @@ DSDOpts::DSDOpts()
     audio_out = 1;
     resume = 0;
     frame_dstar = 0;
-    frame_x2tdma = 1;
-    frame_p25p1 = 1;
+    frame_x2tdma = 0;
+    frame_p25p1 = 0;
     frame_nxdn48 = 0;
-    frame_nxdn96 = 1;
-    frame_dmr = 1;
+    frame_nxdn96 = 0;
+    frame_dmr = 0;
     frame_provoice = 0;
     frame_dpmr = 0;
     frame_ysf = 0;

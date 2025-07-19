@@ -40,6 +40,7 @@ DSDDecoder::DSDDecoder() :
         m_dsdYSF(this),
         m_dsdDPMR(this),
 		m_dsdNXDN(this),
+        m_dsdP25P1(this),
         m_dataRate(DSDRate4800),
         m_syncType(DSDSyncNone),
         m_lastSyncType(DSDSyncNone),
@@ -419,6 +420,12 @@ void DSDDecoder::run(short sample)
         case DSDprocessNXDN:
             m_dsdNXDN.process();
             break;
+        case DSDprocessP25p1:
+            m_dsdP25P1.process();
+            break;
+        case DSDprocessP25p1HD:
+            m_dsdP25P1.processHDU();
+            break;
         default:
             break;
         }
@@ -591,6 +598,27 @@ void DSDDecoder::processFrameInit()
         m_dsdYSF.init();
         m_dsdYSF.process();
         m_fsmState = DSDprocessYSF;
+    }
+    else if ((m_syncType == DSDSyncP25p1P) || (m_syncType == DSDSyncP25p1N)) // P25 Phase 1
+    {
+        m_state.nac = 0;
+        m_state.lastsrc = 0;
+        m_state.lasttg = 0;
+
+        if (m_opts.errorbars == 1)
+        {
+            m_state.inlvl = m_dsdSymbol.getLevel();
+            if (m_opts.verbose > 2)
+            {
+                TRACE("inlvl: %2i%% \r\n", m_state.inlvl);
+            }
+        }
+
+        sprintf(m_state.fsubtype, " P25 PHASE1  ");
+        m_dsdP25P1.init();
+        m_dsdP25P1.process(); // process current symbol first
+        m_fsmState = DSDprocessP25p1;
+        m_mbeRate = DSDMBERate3600x2450; // P25 uses IMBE at 3600x2450
     }
     else
     {
@@ -1447,6 +1475,16 @@ void DSDDecoder::formatStatusText(char *statusText)
             snprintf(&statusText[15], 82, "NXD>RU");
         }
         m_signalFormat = signalFormatNXDN;
+        break;
+    case DSDcc::DSDDecoder::DSDSyncP25p1P:
+    case DSDcc::DSDDecoder::DSDSyncP25p1N:
+        sprintf(&statusText[15], "P25>NAC:%03X TG:%05d SRC:%08d %s %s",
+                getP25Decoder().getNAC(),
+                getP25Decoder().getTalkGroup(),
+                getP25Decoder().getSource(),
+                getP25Decoder().isEncrypted() ? "ENC" : "CLR",
+                getP25Decoder().getEmergencyText());
+        m_signalFormat = signalFormatP25;
         break;
     default:
     	strcpy(&statusText[15], "XXX>");

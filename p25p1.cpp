@@ -1,6 +1,9 @@
 ///////////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2025 Mike Cornelius, VK2XMC.                                    //       
 // Based on the work of Edouard Griffiths, F4EXB.                                //
+//                                                                               //                       
+// Portions adapted from wireshark/plugins/p25/packet-p25cai.c                   //
+// Copyright 2008, Michael Ossmann <mike@ossmann.com>                            //
 //                                                                               //
 // This program is free software; you can redistribute it and/or modify          //
 // it under the terms of the GNU General Public License as published by          //
@@ -47,6 +50,14 @@ const int DSDP25P1::m_imbeMap[18][11] = {
     {187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197}
 };
 
+// Deinterleave table for data and TSBK frames, ref BAAA 7.2
+const unsigned int DSDcc::DSDP25P1::_dataPktMap[98] = {
+    0, 1, 8,   9, 16, 17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, 64, 65, 72, 73, 80, 81, 88, 89, 96, 97,
+    2, 3, 10, 11, 18, 19, 26, 27, 34, 35, 42, 43, 50, 51, 58, 59, 66, 67, 74, 75, 82, 83, 90, 91,
+    4, 5, 12, 13, 20, 21, 28, 29, 36, 37, 44, 45, 52, 53, 60, 61, 68, 69, 76, 77, 84, 85, 92, 93,
+    6, 7, 14, 15, 22, 23, 30, 31, 38, 39, 46, 47, 54, 55, 62, 63, 70, 71, 78, 79, 86, 87, 94, 95
+};
+
 DSDP25P1::DSDP25P1(DSDDecoder *dsdDecoder) :
     m_dsdDecoder(dsdDecoder),
     m_frameType(P25P1FrameNone),
@@ -64,8 +75,9 @@ DSDP25P1::DSDP25P1(DSDDecoder *dsdDecoder) :
     m_mfId(0),
     m_imbeFrameIndex(0),
     m_analogSignalIndex(0),
-    m_viterbi_3_4(3, 4, Viterbi::Poly25),  // This exists
-    m_crcP25(CRC::PolyCCITT16, 16, 0xffff, 0xffff, 1, 0, 0)  // Fix: Use existing polynomial
+    m_viterbi_3_4(3, 4, Viterbi::Poly25),       // 3/4 rate for voice
+    m_viterbi_1_2(1, 2, Viterbi::Poly25),       // 1/2 rate for TSBK/PDU 
+    m_crcP25(CRC::PolyCCITT16, 16, 0x0000, 0xffff, 1, 0, 0)  
 {
     memset(m_nidData, 0, sizeof(m_nidData));
     memset(m_lcData, 0, sizeof(m_lcData));
@@ -83,12 +95,22 @@ DSDP25P1::~DSDP25P1()
 void DSDP25P1::init()
 {
     m_symbolIndex = 0;
+	_statusIndex = 24; // By the time we get here we've already processed 24 dibits for the SYNC word
     m_frameIndex = 0;
     m_state = P25P1StateStartFrame;
     m_frameType = P25P1FrameNone;
     m_imbeFrameIndex = 0;
     m_analogSignalIndex = 0;
     
+    // Clear all frame data buffers at start of each frame
+    memset(m_nidData, 0, sizeof(m_nidData));
+    memset(m_lcData, 0, sizeof(m_lcData));
+    memset(m_esData, 0, sizeof(m_esData));
+    memset(m_statusData, 0, sizeof(m_statusData));
+
+	// The first thing we expect is a Network Identifier (NID) 
+    _symbolsExpected = 8 * 4; // 8 Octets for NID
+
     // Reset P25 state
     m_encrypted = false;
     m_emergency = false;
@@ -108,22 +130,42 @@ void DSDP25P1::process()
     
     // Store analog signal for heuristics
     storeAnalogSignal(m_dsdDecoder->m_dsdSymbol.getSymbolSyncSample(), dibit);
+
+	// Every 35 dibits is a status symbol, these don't make it into the frame data buffer
+    if ((_statusIndex+1) % 36 == 0 && _statusIndex > 0)
+    {
+        _statusIndex++;
+		return; // Skip status symbols for now
+	}
+    _statusIndex++;
+
+	// NID is not interleaved, so we can just place the dibit directly into the frame data buffer
+    if (m_state == P25P1StateStartFrame)
+    {
+        // Acquire dibits and place into buffer
+        int byteIndex = m_symbolIndex / 4;               // 4 dibits per byte
+        int bitPosition = (3 - (m_symbolIndex % 4)) * 2; // bit position within byte (6,4,2,0)
+        if (bitPosition == 6) _frameData[byteIndex] = 0; // Clear byte at start of new dibit
+        _frameData[byteIndex] |= dibit << bitPosition;   // Set dibit in byte
+    }
+    else if (m_frameType = P25P1FrameTSBK)
+    {
+		_deinterleavedDibits[_dataPktMap[m_symbolIndex]] = dibit;
+	}
+
+    m_symbolIndex++;
+	if (m_symbolIndex < _symbolsExpected)
+    {
+		return; // Not enough data yet
+    }
+    
     
     switch (m_state)
     {
     case P25P1StateStartFrame:
-        if (m_symbolIndex < 64) // Process Network Identifier (NID)
-        {
-            m_nidData[m_symbolIndex / 8] |= dibit << (6 - (m_symbolIndex % 8) * 2);
-            m_symbolIndex++;
-            
-            if (m_symbolIndex == 64) 
-            {
-                processNID();
-                m_symbolIndex = 0;
-                m_state = P25P1StateFramePayload;
-            }
-        }
+        processNID();
+        m_symbolIndex = 0;
+        m_state = P25P1StateFramePayload;
         break;
         
     case P25P1StateFramePayload:
@@ -146,11 +188,13 @@ void DSDP25P1::processHDU()
 void DSDP25P1::processNID()
 {
     // Decode Network Identifier using BCH(63,16) shortened to (8,4)
-    if (decodeHamming_10_6_3(m_nidData))
+    if (decodeBCH_63_16_5(_frameData))
     {
-        m_nac = (m_nidData[0] << 4) | (m_nidData[1] >> 4);
-        m_duid = m_nidData[1] & 0x0F;
+        m_nac = (_frameData[0] << 4) | (_frameData[1] >> 4);
+        m_duid = _frameData[1] & 0x0F;
         
+        //TRACE("P25: NAC %d DUID %0X\n", m_nac, m_duid);
+
         // Determine frame type from DUID
         switch (m_duid)
         {
@@ -169,7 +213,8 @@ void DSDP25P1::processNID()
             break;
         case 0x7:
             m_frameType = P25P1FrameTSBK;
-            TRACE("P25: Trunking System Block (TSBK)\n");
+            _symbolsExpected = 98; // 196 bits
+            //TRACE("P25: Trunking System Block (TSBK)\n");
             break;
         case 0x9:
             m_frameType = P25P1FramePDU;
@@ -183,15 +228,15 @@ void DSDP25P1::processNID()
         case 0xF:
             m_frameType = P25P1FrameTDU;
             m_dsdDecoder->m_voice1On = false;
-            TRACE("P25: Terminator Data Unit (TDU)\n");
+            //TRACE("P25: Terminator Data Unit (TDU)\n");
             break;
         default:
             m_frameType = P25P1FrameNone;
-            TRACE("P25: Unknown DUID: 0x%X\n", m_duid);
+            TRACE("P25: Unknown DUID: 0x%X NAC:%d\n", m_duid, m_nac);
             break;
         }
         
-        // Update decoder state - Fix: Use sprintf_s for safety
+        // Update decoder state 
         m_dsdDecoder->m_state.nac = m_nac;
         sprintf_s(m_dsdDecoder->m_state.fsubtype, sizeof(m_dsdDecoder->m_state.fsubtype), " P25 DUID:%X  ", m_duid);
     }
@@ -255,6 +300,11 @@ void DSDP25P1::processLDU1()
     }
     else if (m_symbolIndex < 1656) // Link Control (72 dibits)
     {
+        if (m_symbolIndex == 1584)
+        {
+            memset(m_lcData, 0, sizeof(m_lcData));
+        }
+
         int lcIndex = m_symbolIndex - 1584;
         m_lcData[lcIndex / 6] |= m_dsdDecoder->m_dsdSymbol.getDibit() << (4 - (lcIndex % 6) * 2);
         m_symbolIndex++;
@@ -266,6 +316,11 @@ void DSDP25P1::processLDU1()
     }
     else if (m_symbolIndex < 1728) // Status symbols (72 dibits)
     {
+        if (m_symbolIndex == 1656)
+        {
+            memset(m_statusData, 0, sizeof(m_statusData));
+        }
+
         int statusIndex = m_symbolIndex - 1656;
         m_statusData[statusIndex / 4] |= m_dsdDecoder->m_dsdSymbol.getDibit() << (6 - (statusIndex % 4) * 2);
         m_symbolIndex++;
@@ -290,6 +345,11 @@ void DSDP25P1::processLDU2()
     }
     else if (m_symbolIndex < 1656) // Encryption Sync (72 dibits)
     {
+        if (m_symbolIndex == 1584)
+        {
+            memset(m_esData, 0, sizeof(m_esData));
+        }
+
         int esIndex = m_symbolIndex - 1584;
         m_esData[esIndex / 18] |= m_dsdDecoder->m_dsdSymbol.getDibit() << (16 - (esIndex % 18) * 2);
         m_symbolIndex++;
@@ -420,7 +480,7 @@ void DSDP25P1::processTDU()
 {
     // Terminator Data Unit - end voice transmission
     m_dsdDecoder->m_voice1On = false;
-    TRACE("P25: TDU - End transmission\n");
+    //TRACE("P25: TDU - End transmission\n");
     m_dsdDecoder->resetFrameSync();
 }
 
@@ -433,8 +493,91 @@ void DSDP25P1::processTDULC()
 void DSDP25P1::processTSBK()
 {
     // Trunking System Block - control signaling
-    TRACE("P25: TSBK processing not implemented\n");
+    // Ref: TIA-102.AABB-B and TIA-102.AABC-B
+
+    // TSBK is encoded with 1/2 rate Trellis coding
+    if (decodeTrellis_1_2() == false)
+    {
+        TRACE("P25: TSBK decode error\n");
+        m_dsdDecoder->resetFrameSync();
+		return; // Decode error, return failure
+    }
+	// Now we have the decoded TSBK data in _frameData
+ 
+    // Check CRC-16 on decoded data (first 10 bytes data + 2 bytes CRC)
+    unsigned short receivedCRC = (_frameData[10] << 8) | _frameData[11];
+    unsigned short calculatedCRC = (unsigned short)m_crcP25.crcbitbybit(_frameData, 10);
+
+    // Extract TSBK fields from decoded data
+    TSBK tsbk;
+    tsbk.opcode = _frameData[0];
+    tsbk.mfId = _frameData[1];
+    memcpy(tsbk.args, &_frameData[2], 8);
+    tsbk.crc = receivedCRC;
+
+    unsigned char lb = (tsbk.opcode >> 7) & 0x01; // Last Block Flag
+    unsigned char pf = (tsbk.opcode >> 6) & 0x01; // Protected Flag
+    tsbk.opcode &= 0x3F; // Clear flags, keep opcode
+
+    TRACE("P25: TSBK(%c%c) Opcode: 0x%02X MFID: 0x%02X CRC: %s\n",
+        lb ? 'L' : '-', pf ? 'P' : '-', tsbk.opcode, tsbk.mfId,
+        (receivedCRC == calculatedCRC) ? "OK" : "FAIL");
+
+    if (tsbk.mfId == 0x00 || tsbk.mfId == 0x01)
+    {
+        processTSBKOpcode(tsbk);
+    }
+    else
+    {
+        TRACE("P25: TSBK Manufacturer ID not recognized: 0x%02X\n", tsbk.mfId);
+	}
+
+    // Reset for next frame
     m_dsdDecoder->resetFrameSync();
+}
+void DSDP25P1::processTSBKOpcode(TSBK& tsbk)
+{
+    // Handle specific TSBK opcodes here
+    switch (tsbk.opcode)
+    {
+    case 0x01: // Example opcode for system information
+		TRACE("P25: TSBK System Information MFID: 0x%02X\n", tsbk.mfId);
+        break;
+    case 0x02: // Example opcode for emergency
+		TRACE("P25: TSBK Emergency MFID: 0x%02X\n", tsbk.mfId);
+        break;
+
+    case 0x3B: // Network Status Broadcast
+		processNetworkStatusBroadcast(tsbk);
+        break;
+
+    case 0x3C: // Example opcode for channel grant
+		// Process channel grant
+       
+		break;
+
+    default:
+        TRACE("P25: Unknown TSBK opcode: 0x%02X\n", tsbk.opcode);
+        break;
+    }
+}
+
+void DSDP25P1::processNetworkStatusBroadcast(TSBK& tsbk)
+{
+    int LRA = tsbk.args[0]; // Logical Radio Address
+    int WACNID = (tsbk.args[1] << 12) | (tsbk.args[2] << 4) | (tsbk.args[3] >> 4); // WACN ID
+    int SystemID = ((tsbk.args[3] & 0x0F) << 8) | tsbk.args[4]; // System ID
+    int Channel = ((tsbk.args[5] & 0xF0) >> 4) | (tsbk.args[6] & 0x0F); // Channel Number
+    int ServiceClass = tsbk.args[7]; // Service Class
+
+    //TRACE("P25: TSBK Network Status Broadcast: LRA:%d WACNID:%04X SystemID:%04X Channel:%d ServiceClass:%d\n",
+    //    LRA, WACNID, SystemID, Channel, ServiceClass);
+
+    std::cerr << "P25: TSBK Network Status Broadcast: LRA:" << LRA
+              << " WACNID:" << std::hex << WACNID
+              << " SystemID:" << SystemID
+              << " Channel:" << Channel
+		<< " ServiceClass:" << ServiceClass << std::dec << std::endl;
 }
 
 void DSDP25P1::processPDU()
@@ -442,6 +585,38 @@ void DSDP25P1::processPDU()
     // Packet Data Unit - data transmission
     TRACE("P25: PDU processing not implemented\n");
     m_dsdDecoder->resetFrameSync();
+}
+
+int DSDP25P1::find_min(uint8_t list[], int len)
+{
+    int min = list[0];
+    int index = 0;
+    int unique = 1;
+    int i;
+
+    for (i = 1; i < len; i++) {
+        if (list[i] < min) {
+            min = list[i];
+            index = i;
+            unique = 1;
+        }
+        else if (list[i] == min) {
+            unique = 0;
+        }
+    }
+    /* return -1 if a minimum can't be found */
+    if (!unique)
+        return -1;
+
+    return index;
+}
+
+int DSDP25P1::count_bits(unsigned int n)
+{
+    int i = 0;
+    for (i = 0; n != 0; i++)
+        n &= n - 1;
+    return i;
 }
 
 bool DSDP25P1::decodeHamming_10_6_3(unsigned char* data)
@@ -460,12 +635,69 @@ bool DSDP25P1::decodeReedSolomon_24_12_13(unsigned char* data, int blocks)
     return true; // Assume success for now
 }
 
+bool DSDP25P1::decodeBCH_63_16_5(unsigned char* data)
+{
+    return m_bch_63_16_5.decode(data);
+}
+
 bool DSDP25P1::decodeTrellis_3_4(unsigned char* data, int length)
 {
     // Fix: Use std::vector instead of VLA for C++ compatibility
     std::vector<unsigned char> decoded(length * 3 / 4);
     m_viterbi_3_4.decodeFromBits(decoded.data(), data, length, 0);
     memcpy(data, decoded.data(), length * 3 / 4);
+    return true;
+}
+
+// Decode deinterleaved dibits using 1/2 rate Trellis coding
+// This is used for TSBK and PDU frames and is always 98 dibits input 48 dibits output per BAAA section 7
+bool DSDP25P1::decodeTrellis_1_2()
+{
+    int i, j;
+    int state = 0;
+    uint8_t codeword;
+    uint8_t hd[4];  // Hamming distances for each candidate codeword
+
+    static const uint8_t next_words[4][4] = {
+        {0x2, 0xC, 0x1, 0xF},
+        {0xE, 0x0, 0xD, 0x3},
+        {0x9, 0x7, 0xA, 0x4},
+        {0x5, 0xB, 0x6, 0x8}
+    };
+
+    memset(_frameData, 0, sizeof(_frameData));
+
+    /* step through 4 bit codewords in input */
+    for (i = 0; i < 98; i += 2) {
+        codeword = ((_deinterleavedDibits[i] << 2) | (_deinterleavedDibits[i + 1]));
+        /* try each codeword in a row of the state transition table */
+        for (j = 0; j < 4; j++) {
+            /* find Hamming distance for candidate */
+            hd[j] = count_bits(codeword ^ next_words[state][j]);
+        }
+        /* find the dibit that matches the most codeword bits (minimum Hamming distance) */
+        state = find_min(hd, 4);
+        /* error if minimum can't be found */
+        if (state == -1)
+        {
+            //TRACE("P25: TSBK decode error at dibit %d, codeword: %02X\n", i / 2, codeword);
+            m_dsdDecoder->resetFrameSync();
+            return false;	// decode error, return failure
+        }
+        /* It also might be nice to report a condition where the minimum is
+         * non-zero, i.e. an error has been corrected.  It probably shouldn't
+         * be a permanent failure, though.
+         *
+         * DISSECTOR_ASSERT(hd[state] == 0);
+         */
+
+         /* append dibit onto output buffer */
+        if (i < 96)
+        {
+            int bitPosition = (6 - (((i / 2) % 4) * 2));
+            _frameData[(i / 8)] |= state << bitPosition;
+        }
+    }
     return true;
 }
 
