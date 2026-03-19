@@ -19,41 +19,37 @@
 #ifndef DSD_LOGGER_H_
 #define DSD_LOGGER_H_
 
-#include <sdkddkver.h>
-#include <afx.h>
-
 #include <stdio.h>
 #include <cstdarg>
 
 #include <streambuf>
 #include <ostream>
+#include <winsock2.h>  // Must precede windows.h to avoid WinSock.h/WinSock2.h conflict
 #include <windows.h>
+#ifdef interface
+#undef interface  // windows.h defines 'interface' as a keyword; restore it as a normal identifier
+#endif
 #include <sstream>
 #include <iostream>
 
 #include "export.h"
 
-#include "../XMC_SDR.h"
-
+// Redirect TRACE to OutputDebugStringA (was MFC macro)
+#ifndef TRACE
+#ifdef _DEBUG
+#define TRACE(fmt, ...) do { char _tbuf[512]; _snprintf_s(_tbuf, sizeof(_tbuf), _TRUNCATE, fmt, ##__VA_ARGS__); OutputDebugStringA(_tbuf); } while(0)
+#else
+#define TRACE(fmt, ...) do {} while(0)
+#endif
+#endif
 
 class dbg_stream_for_cout
     : public std::stringbuf
 {
 public:
     ~dbg_stream_for_cout() { sync(); }
-    int sync()
-    {
-        ::OutputDebugStringA(str().c_str());
-        CString s(str().c_str());
-        if(s.GetLength())
-            theApp.LogTextToRXView(s);
-        str(std::string()); // Clear the string buffer
-        return 0;
-    }
+    int sync() override;
 };
-
-class CXMCSDRApp;
-extern CXMCSDRApp theApp;
 
 namespace DSDcc
 {
@@ -91,20 +87,7 @@ public:
     void setFile(const char *filename);
     void setVerbosity(int verbosity) { m_verbosity = verbosity; }
 
-    void log(const char* fmt, ...) const
-    {
-        if (m_verbosity > 0)
-        {
-            char buffer[1024];
-            va_list argptr;
-            va_start(argptr, fmt);
-            //vfprintf(m_logfp, fmt, argptr);
-            _vsnprintf_s(buffer, sizeof(buffer) / sizeof(char), _TRUNCATE, fmt, argptr);
-            va_end(argptr);
-
-            OutputDebugStringA(buffer);
-        }
-    }
+    void log(const char* fmt, ...) const;
 
     dbg_stream_for_cout g_DebugStreamFor_cout;
     

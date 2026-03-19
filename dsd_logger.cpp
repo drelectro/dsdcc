@@ -15,8 +15,19 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include "dsd_logger.h"
+#include "../Utils/LogRouter.h"
 
 #pragma warning(disable : 4996)
+
+// Route cout/cerr output to the Qt log widget.
+int dbg_stream_for_cout::sync()
+{
+    if (!str().empty()) {
+        LogRouter::post(str().c_str());
+        str(std::string());
+    }
+    return 0;
+}
 
 namespace DSDcc
 {
@@ -25,8 +36,8 @@ DSDLogger::DSDLogger()
 {
     m_verbosity = 1;
     m_logfp = stderr;
-    std::cout.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cout to OutputDebugString!
-    std::cerr.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cout to OutputDebugString!
+    std::cout.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cout to LogRouter
+    std::cerr.rdbuf(&g_DebugStreamFor_cout); // Redirect std::cerr to LogRouter
 }
 
 DSDLogger::DSDLogger(const char *filename)
@@ -56,6 +67,19 @@ void DSDLogger::setFile(const char *filename)
 
     if (!m_logfp) {
         m_logfp = stderr;
+    }
+}
+
+void DSDLogger::log(const char* fmt, ...) const
+{
+    if (m_verbosity > 0)
+    {
+        char buffer[1024];
+        va_list argptr;
+        va_start(argptr, fmt);
+        _vsnprintf_s(buffer, sizeof(buffer) / sizeof(char), _TRUNCATE, fmt, argptr);
+        va_end(argptr);
+        LogRouter::post(buffer);
     }
 }
 
