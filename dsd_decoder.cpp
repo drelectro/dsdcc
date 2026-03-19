@@ -21,6 +21,7 @@
 #include "timeutil.h"
 #include "dsd_sync.h"
 #include "dsd_decoder.h"
+#include "../Utils/LogRouter.h"
 
 #pragma warning(disable : 4996)
 
@@ -1505,10 +1506,11 @@ int DSDDecoder::comp(const void *a, const void *b)
         return 1;
 }
 
-void DSDDecoder::outputText(CString text)
+void DSDDecoder::outputText(const char* text)
 {
-    // TODO: Send to sink
-    theApp.LogTextToRXView(text);
+    if (text && *text) {
+        LogRouter::post(text);
+    }
 }
 
 } // namespace dsdcc
