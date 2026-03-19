@@ -34,10 +34,14 @@
 
 #include "export.h"
 
-// Redirect TRACE to OutputDebugStringA (was MFC macro)
+// Internal helper — implemented in dsd_logger.cpp, routes to LogRouter.
+// Used by the TRACE macro so the header stays Qt-free.
+void dsd_trace_post(const char* msg);
+
+// Redirect TRACE to the Qt log widget (was MFC macro, then OutputDebugStringA)
 #ifndef TRACE
 #ifdef _DEBUG
-#define TRACE(fmt, ...) do { char _tbuf[512]; _snprintf_s(_tbuf, sizeof(_tbuf), _TRUNCATE, fmt, ##__VA_ARGS__); OutputDebugStringA(_tbuf); } while(0)
+#define TRACE(fmt, ...) do { char _tbuf[512]; _snprintf_s(_tbuf, sizeof(_tbuf), _TRUNCATE, fmt, ##__VA_ARGS__); dsd_trace_post(_tbuf); } while(0)
 #else
 #define TRACE(fmt, ...) do {} while(0)
 #endif

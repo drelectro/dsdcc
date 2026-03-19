@@ -29,6 +29,12 @@ int dbg_stream_for_cout::sync()
     return 0;
 }
 
+// Used by the TRACE macro — keeps LogRouter out of the header.
+void dsd_trace_post(const char* msg)
+{
+    LogRouter::post(msg);
+}
+
 namespace DSDcc
 {
 
