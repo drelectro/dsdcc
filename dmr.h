@@ -17,6 +17,10 @@
 #ifndef DMR_H_
 #define DMR_H_
 
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+
 #include "fec.h"
 #include "export.h"
 
@@ -145,6 +149,9 @@ private:
     void decodeCSBK(const unsigned char *infoBits);         //!< Parse CSBK PDU (ETSI TS 102 361-1 §9.1.7)
     void decodeMBCHeader(const unsigned char *infoBits);    //!< Parse MBC Header PDU
     void decodeMBCContinuation(const unsigned char *infoBits); //!< Log MBC Continuation block
+    void noteCSBKSyncAcquired();
+    void noteCSBKSyncLost();
+    bool shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, const std::string& messageText);
 
     DSDDecoder *m_dsdDecoder;
     int  m_symbolIndex;                   //!< current symbol index in non HD sequence
@@ -192,6 +199,18 @@ private:
     static const int rY[36];
     static const int rZ[36];
     static const unsigned short BasicPrivacyKeys[DMR_BP_KEYS_COUNT];
+
+    struct CSBKLogState
+    {
+        std::size_t signature = 0;
+        std::uint64_t lastLogMs = 0;
+        std::uint32_t syncEpoch = 0;
+        bool seen = false;
+    };
+
+    std::unordered_map<std::uint32_t, CSBKLogState> m_csbkLogStates;
+    std::uint32_t m_csbkSyncEpoch = 0;
+    bool m_csbkSyncLocked = false;
 
     int m_verbosity = 1;
 };

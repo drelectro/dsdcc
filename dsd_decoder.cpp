@@ -1201,10 +1201,10 @@ void DSDDecoder::resetFrameSync()
 
     if ((m_opts.symboltiming == 1) && (m_state.carrier == 1))
     {
-        TRACE("\nSymbol Timing:\n");
+        DSD_LOG("Symbol Timing: ");
     }
 
-
+    
     m_nxdnInterSyncCount = -1;   // reset to quiet state
     m_fsmState = DSDLookForSync;
 }
@@ -1213,11 +1213,11 @@ void DSDDecoder::printFrameSync(const char *frametype, int offset)
 {
     if (m_opts.verbose > 0)
     {
-        TRACE("Sync: %s \r\n", frametype);
+        DSD_LOG("Sync: " << frametype);
     }
     else if (m_opts.verbose > 2)
     {
-        TRACE("Sync: %s o: %4i\r\n", frametype, offset);
+        DSD_LOG("Sync: " << frametype << " o: " << offset);
     }
 }
 

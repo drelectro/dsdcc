@@ -15,6 +15,8 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include <iostream>
+#include <chrono>
+#include <functional>
 #include <iomanip>
 #include <string.h>
 #include "dmr.h"
@@ -180,6 +182,7 @@ DSDDMR::~DSDDMR()
 void DSDDMR::initData()
 {
 //    DSD_LOG("DSDDMR::initData");
+    noteCSBKSyncAcquired();
     m_burstType = DSDDMRBaseStation;
     processDataFirstHalf(90+1);
 }
@@ -187,6 +190,7 @@ void DSDDMR::initData()
 void DSDDMR::initDataMS()
 {
 //    DSD_LOG("DSDDMR::initDataMS");
+    noteCSBKSyncAcquired();
     m_burstType = DSDDMRMobileStation;
     processDataFirstHalfMS();
 }
@@ -419,6 +423,7 @@ void DSDDMR::processSyncOrSkip()
         if (syncEngine.isMatching(DSDSync::SyncDMRDataBS))
         {
 //    DSD_LOG("DSDDMR::processSyncOrSkip: data sync");
+            noteCSBKSyncAcquired();
             processDataFirstHalf(90);
             m_dsdDecoder->m_fsmState = DSDDecoder::DSDprocessDMRdata;
             return;
@@ -434,6 +439,9 @@ void DSDDMR::processSyncOrSkip()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
+        // We crossed a full burst without seeing a valid sync pattern.
+        noteCSBKSyncLost();
+
         // return to voice super frame
         m_slot = (DSDDMRSlot) (((int) m_slot + 1) % 2); // to keep the slot in the next slot period fake a slot reversal
         m_continuation = true;
@@ -1443,6 +1451,60 @@ static unsigned int bitsToUint(const unsigned char *bits, int nbBits)
     return v;
 }
 
+void DSDDMR::noteCSBKSyncAcquired()
+{
+    // Edge-triggered acquisition: only bump epoch when transitioning from unlocked to locked.
+    if (m_csbkSyncLocked)
+        return;
+
+    m_csbkSyncLocked = true;
+    if (m_csbkSyncEpoch == 0xFFFFFFFFU)
+    {
+        m_csbkSyncEpoch = 0;
+        m_csbkLogStates.clear();
+    }
+    m_csbkSyncEpoch++;
+}
+
+void DSDDMR::noteCSBKSyncLost()
+{
+    m_csbkSyncLocked = false;
+}
+
+bool DSDDMR::shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, const std::string& messageText)
+{
+    // Highest verbosity: always print all CSBKs. Lowest: print CRC failures only.
+    if (m_verbosity >= 3)
+        return true;
+    if (m_verbosity <= 0)
+        return !crcOK;
+
+    const auto now = std::chrono::steady_clock::now();
+    const std::uint64_t nowMs = (std::uint64_t) std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    const std::uint32_t slotId = (m_slot == DSDDMRSlot2) ? 1U : 0U;
+    const std::uint32_t key = (slotId << 16) | ((std::uint32_t) mfid << 8) | (std::uint32_t) csbko;
+    const std::size_t signature = std::hash<std::string>{}(messageText);
+
+    CSBKLogState& st = m_csbkLogStates[key];
+    const bool firstAfterSync = (!st.seen) || (st.syncEpoch != m_csbkSyncEpoch);
+    const bool changed = (!st.seen) || (st.signature != signature);
+    const std::uint64_t heartbeatMs = (m_verbosity >= 2) ? 3000U : 10000U;
+    const bool heartbeatDue = (!st.seen) || ((nowMs - st.lastLogMs) >= heartbeatMs);
+
+    const bool log = (!crcOK) || firstAfterSync || changed || heartbeatDue;
+
+    if (log)
+    {
+        st.signature = signature;
+        st.lastLogMs = nowMs;
+        st.syncEpoch = m_csbkSyncEpoch;
+        st.seen = true;
+    }
+
+    return log;
+}
+
 void DSDDMR::decodeCSBK(const unsigned char *infoBits)
 {
     unsigned char lb    = infoBits[0];
@@ -1452,10 +1514,9 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
     // Verify CRC-CCITT-16 with TS 102 361-1 §B.3.12 CSBK mask.
     bool crcOK = csbkCRCOK(infoBits, 0xA5A5, m_verbosity);
 
-    const char* name = nullptr;
+    const char *name = nullptr;
     if (mfid == 0x00) name = csbkoName(csbko);
 
-	bool log = true;
     std::ostringstream msg;
     msg << "CSBK["
         << (m_slot == DSDDMRSlot1 ? "1" : "2")
@@ -1495,7 +1556,116 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
                 << " Backoff=" << backoff
                 << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
                 << " MS=" << msAddress;
-			log = false; // too much info for regular logs, but useful for debugging
+        }
+        else if (csbko == 0x1C) // C_AHOY (Table 7.22)
+        {
+            unsigned int serviceOptionsMirror = bitsToUint(&infoBits[16], 7);
+            unsigned int serviceKindFlag      = bitsToUint(&infoBits[23], 1);
+            unsigned int als                  = bitsToUint(&infoBits[24], 1);
+            unsigned int groupFlag            = bitsToUint(&infoBits[25], 1);
+            unsigned int appendedBlocks       = bitsToUint(&infoBits[26], 2);
+            unsigned int serviceKind          = bitsToUint(&infoBits[28], 4);
+            unsigned int dst                  = bitsToUint(&infoBits[32], 24);
+            unsigned int src                  = bitsToUint(&infoBits[56], 24);
+
+            msg << " SOm=" << serviceOptionsMirror
+                << " SKF=" << serviceKindFlag
+                << " ALS=" << als
+                << " GI=" << groupFlag
+                << " App=" << appendedBlocks
+                << " Kind=" << serviceKind
+                << " Src=" << src
+                << " Dst=" << dst;
+        }
+        else if (csbko == 0x20) // C_ACKD (Table 7.23)
+        {
+            unsigned int responseInfo = bitsToUint(&infoBits[16], 7);
+            unsigned int reasonCode   = bitsToUint(&infoBits[23], 8);
+            unsigned int reserved     = bitsToUint(&infoBits[31], 1);
+            unsigned int target       = bitsToUint(&infoBits[32], 24);
+            unsigned int addInfo      = bitsToUint(&infoBits[56], 24);
+
+            msg << " RspInfo=" << responseInfo
+                << " Reason=0x" << std::hex << std::setw(2) << std::setfill('0') << reasonCode << std::dec
+                << " Rsv=" << reserved
+                << " Tgt=" << target
+                << " AddInfo=" << addInfo;
+        }
+        else if (csbko == 0x28) // C_BCAST (Table 7.20)
+        {
+            unsigned int annType = bitsToUint(&infoBits[16], 5);
+            unsigned int parms1  = bitsToUint(&infoBits[21], 14);
+            unsigned int reg     = bitsToUint(&infoBits[35], 1);
+            unsigned int backoff = bitsToUint(&infoBits[36], 4);
+            unsigned int sic     = bitsToUint(&infoBits[40], 16);
+            unsigned int parms2  = bitsToUint(&infoBits[56], 24);
+
+            msg << " AnnType=" << annType
+                << " P1=" << parms1
+                << " Reg=" << reg
+                << " Backoff=" << backoff
+                << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
+                << " P2=0x" << std::hex << std::setw(6) << std::setfill('0') << parms2 << std::dec;
+        }
+        else if (csbko == 0x2E) // P_CLEAR (Table 7.30)
+        {
+            unsigned int physChan = bitsToUint(&infoBits[16], 12);
+            unsigned int gi       = bitsToUint(&infoBits[31], 1);
+            unsigned int dst      = bitsToUint(&infoBits[32], 24);
+            unsigned int src      = bitsToUint(&infoBits[56], 24);
+
+            msg << " Ch=" << physChan
+                << " GI=" << gi
+                << " Src=" << src
+                << " Dst=" << dst;
+        }
+        else if (csbko == 0x2F) // P_PROTECT (Table 7.31)
+        {
+            unsigned int protectKind = bitsToUint(&infoBits[28], 3);
+            unsigned int gi          = bitsToUint(&infoBits[31], 1);
+            unsigned int dst         = bitsToUint(&infoBits[32], 24);
+            unsigned int src         = bitsToUint(&infoBits[56], 24);
+
+            msg << " Kind=" << protectKind
+                << " GI=" << gi
+                << " Src=" << src
+                << " Dst=" << dst;
+        }
+        else if (csbko == 0x31) // TV_GRANT (Table 7.11)
+        {
+            unsigned int physChan = bitsToUint(&infoBits[16], 12);
+            unsigned int tdmaSlot = bitsToUint(&infoBits[28], 1);
+            unsigned int late     = bitsToUint(&infoBits[29], 1);
+            unsigned int emerg    = bitsToUint(&infoBits[30], 1);
+            unsigned int offset   = bitsToUint(&infoBits[31], 1);
+            unsigned int dst      = bitsToUint(&infoBits[32], 24);
+            unsigned int src      = bitsToUint(&infoBits[56], 24);
+
+            msg << " Ch=" << physChan
+                << " TS=" << tdmaSlot
+                << " Late=" << late
+                << " Emerg=" << emerg
+                << " Offs=" << offset
+                << " Src=" << src
+                << " Dst=" << dst;
+        }
+        else if (csbko == 0x34) // TD_GRANT (Table 7.15)
+        {
+            unsigned int physChan = bitsToUint(&infoBits[16], 12);
+            unsigned int tdmaSlot = bitsToUint(&infoBits[28], 1);
+            unsigned int hiRate   = bitsToUint(&infoBits[29], 1);
+            unsigned int emerg    = bitsToUint(&infoBits[30], 1);
+            unsigned int offset   = bitsToUint(&infoBits[31], 1);
+            unsigned int dst      = bitsToUint(&infoBits[32], 24);
+            unsigned int src      = bitsToUint(&infoBits[56], 24);
+
+            msg << " Ch=" << physChan
+                << " TS=" << tdmaSlot
+                << " HiRate=" << hiRate
+                << " Emerg=" << emerg
+                << " Offs=" << offset
+                << " Src=" << src
+                << " Dst=" << dst;
         }
         else if (csbko == 0x21) // Preamble CSBKs
         {
@@ -1529,7 +1699,8 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
     }
 
     msg << " LB=" << (int)lb;
-    if (log) DSD_LOG(msg.str());
+    const std::string logLine = msg.str();
+    if (shouldLogCSBK(csbko, mfid, crcOK, logLine)) DSD_LOG(logLine);
 
     // Update slot text: "[act][CC] CSB [opHex] [dst7]"
     char opBuf[20];
