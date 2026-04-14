@@ -31,6 +31,12 @@ class DSDDecoder;
 class DSDCC_API DSDSymbol
 {
 public:
+    typedef enum
+    {
+        FilterDefault, //!< Protocol-default filter (2400->nxdn, all others->dmr)
+        FilterP25      //!< P25 Phase 1: RRC alpha=0.2 matched filter
+    } FilterMode;
+
     explicit DSDSymbol(DSDDecoder *dsdDecoder);
     ~DSDSymbol();
 
@@ -41,6 +47,7 @@ public:
     void setSamplesPerSymbol(int samplesPerSymbol);
     void setFSK(unsigned int nbSymbols, bool inverted=false);
     void setNoSignal(bool noSignal) { m_noSignal = noSignal; }
+    void setFilterMode(FilterMode mode); //!< select protocol-specific input filter and PLL tuning
     bool pushSample(short sample); //!< push a new sample into the decoder. Returns true if a new symbol is available
 
     int getSymbol() const { return m_symbol; }
@@ -88,6 +95,7 @@ private:
 
     DSDDecoder *m_dsdDecoder;
     DSDFilters m_dsdFilters;
+    FilterMode m_filterMode; //!< active input filter selection
 
     int m_symbol;      //!< the last retrieved symbol
     int m_sampleIndex; //!< the current sample index for the symbol in progress

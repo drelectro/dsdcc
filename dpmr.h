@@ -17,9 +17,6 @@
 #ifndef DPMR_H_
 #define DPMR_H_
 
-#include <sdkddkver.h>
-#include <afx.h>
-
 
 #include "fec.h"
 #include "export.h"

@@ -1277,7 +1277,7 @@ void DSDNXDN::processVoiceFrameEHR(int symbolIndex, int dibit)
     if ((symbolIndex == 0) && (m_dsdDecoder->m_opts.errorbars == 1))
     {
         //m_dsdDecoder->getLogger().log("\nMBE: ");
-        m_dsdDecoder->outputText(L"\nMBE: ");
+        m_dsdDecoder->outputText("\nMBE: ");
     }
 
     if (symbolIndex % 36 == 0)
@@ -1306,7 +1306,7 @@ void DSDNXDN::processVoiceFrameEHR(int symbolIndex, int dibit)
         if (m_dsdDecoder->m_opts.errorbars == 1)
         {
             //m_dsdDecoder->getLogger().log(".");
-            m_dsdDecoder->outputText(L".");
+            m_dsdDecoder->outputText(".");
         }
     }
 }
@@ -1316,7 +1316,7 @@ void DSDNXDN::processVoiceFrameEFR(int symbolIndex, int dibit)
     if ((symbolIndex == 0) && (m_dsdDecoder->m_opts.errorbars == 1))
     {
         //m_dsdDecoder->getLogger().log("\nMBE: ");
-        m_dsdDecoder->outputText(L"\nMBE: ");
+        m_dsdDecoder->outputText("\nMBE: ");
     }
 
     storeSymbolDV(symbolIndex % 72, dibit);
@@ -1328,7 +1328,7 @@ void DSDNXDN::processVoiceFrameEFR(int symbolIndex, int dibit)
         if (m_dsdDecoder->m_opts.errorbars == 1)
         {
             //m_dsdDecoder->getLogger().log(".");
-            m_dsdDecoder->outputText(L".");
+            m_dsdDecoder->outputText(".");
         }
     }
 }
@@ -1371,7 +1371,7 @@ void DSDNXDN::printAdjacentSites()
             << " channel: " << m_adjacentSites[i].m_channelNumber
             << " location: " << std::hex << m_adjacentSites[i].m_locationId << std::endl;
 
-        m_dsdDecoder->outputText(L"SITES !!\r\n");
+        m_dsdDecoder->outputText("SITES !!\r\n");
     }
 }
 

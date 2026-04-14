@@ -122,9 +122,7 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
     if (m_dsdDecoder->m_opts.errorbars == 1)
     {
         //m_dsdDecoder->getLogger().log("%s", m_err_str);
-        CString s(m_err_str);
-        //s.Format(L"%s", );
-        m_dsdDecoder->outputText(s);
+        m_dsdDecoder->outputText(m_err_str);
     }
 
     processAudio();

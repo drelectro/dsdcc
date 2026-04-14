@@ -42,7 +42,8 @@ DSDSymbol::DSDSymbol(DSDDecoder *dsdDecoder) :
         m_pll(0.1f, 0.003f, 0.25),
         m_binSymbolBuffer(1024),
         m_syncSymbolBuffer(64),
-		m_nonInvertedSyncSymbolBuffer(64)
+		m_nonInvertedSyncSymbolBuffer(64),
+        m_filterMode(FilterDefault)
 {
     noCarrier();
     m_umid = 0;
@@ -70,6 +71,7 @@ void DSDSymbol::noCarrier()
     m_min = 0;
     m_center = 0;
     m_filteredSample = 0;
+    setFilterMode(FilterDefault);
 }
 
 void DSDSymbol::resetFrameSync()
@@ -91,6 +93,15 @@ void DSDSymbol::resetZeroCrossing()
 }
 
 /**
+ * Select protocol-specific input filter.
+ * Call after setSamplesPerSymbol when the protocol type is known.
+ */
+void DSDSymbol::setFilterMode(FilterMode mode)
+{
+    m_filterMode = mode;
+}
+
+/**
  * Squares the output of the match filter and passes it through a narrow bandpass filter centered on the
  * Symbol rate frequency. Inspired by: http://www.ece.umd.edu/~tretter/commlab/c6713slides/FSKSlides.pdf
  * Non linear clock correction following estimated zero point shift using heuristic table.
@@ -102,7 +113,9 @@ bool DSDSymbol::pushSample(short sample)
 
     if (m_dsdDecoder->m_opts.use_cosine_filter)
     {
-        if (m_samplesPerSymbol == 20) {
+        if (m_filterMode == FilterP25) {
+			sample = m_dsdFilters.p25p1_filter(sample); // I&D filter for P25 Phase 1 per TIA-102.CAAA-B
+        } else if (m_samplesPerSymbol == 20) {
             sample = m_dsdFilters.nxdn_filter(sample); // 6.25 kHz for 2400 baud
         } else {
             sample = m_dsdFilters.dmr_filter(sample);  // 12.5 kHz for 4800 and 9600 baud

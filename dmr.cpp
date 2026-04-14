@@ -15,6 +15,7 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include <iostream>
+#include <iomanip>
 #include <string.h>
 #include "dmr.h"
 #include "dsd_decoder.h"
@@ -63,6 +64,7 @@ const char *DSDDMR::m_slotTypeText[DMR_TYPES_COUNT] = {
         "RSV",
         "RSV"
 };
+
 
 /*
  * DMR AMBE interleave schedule
@@ -168,6 +170,7 @@ DSDDMR::DSDDMR(DSDDecoder *dsdDecoder) :
     memset(m_voice2EmbSigRawBits, 0, 16*8);
     memset(m_syncDibits, 0, 24);
     memset(m_mbeDVFrame, 0, 9);
+    memset(m_dataDibits, 0, 98);
 }
 
 DSDDMR::~DSDDMR()
@@ -176,28 +179,28 @@ DSDDMR::~DSDDMR()
 
 void DSDDMR::initData()
 {
-//    std::cerr << "DSDDMR::initData" << std::endl;
+//    DSD_LOG("DSDDMR::initData");
     m_burstType = DSDDMRBaseStation;
     processDataFirstHalf(90+1);
 }
 
 void DSDDMR::initDataMS()
 {
-//    std::cerr << "DSDDMR::initDataMS" << std::endl;
+//    DSD_LOG("DSDDMR::initDataMS");
     m_burstType = DSDDMRMobileStation;
     processDataFirstHalfMS();
 }
 
 void DSDDMR::initVoice()
 {
-//    std::cerr << "DSDDMR::initVoice" << std::endl;
+//    DSD_LOG("DSDDMR::initVoice");
     m_burstType = DSDDMRBaseStation;
     processVoiceFirstHalf(90+1);
 }
 
 void DSDDMR::initVoiceMS()
 {
-//    std::cerr << "DSDDMR::initVoiceMS" << std::endl;
+//    DSD_LOG("DSDDMR::initVoiceMS");
     m_burstType = DSDDMRMobileStation;
     processVoiceFirstHalfMS();
 }
@@ -222,7 +225,7 @@ void DSDDMR::processData()
         {
             if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
             {
-                std::cerr << "DSDDMR::processData: error: remaining voice in slot1" << std::endl;
+                DSD_LOG("DSDDMR::processData: error: remaining voice in slot1");
 
                 if (m_voice2FrameCount < DMR_VOX_SUPERFRAME_LEN)
                 {
@@ -253,7 +256,7 @@ void DSDDMR::processData()
         {
             if (m_voice2FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
             {
-                std::cerr << "DSDDMR::processData: error: remaining voice in slot2" << std::endl;
+                DSD_LOG("DSDDMR::processData: error: remaining voice in slot2");
 
                 if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN)
                 {
@@ -415,14 +418,14 @@ void DSDDMR::processSyncOrSkip()
 
         if (syncEngine.isMatching(DSDSync::SyncDMRDataBS))
         {
-//		    std::cerr << "DSDDMR::processSyncOrSkip: data sync" << std::endl;
+//    DSD_LOG("DSDDMR::processSyncOrSkip: data sync");
             processDataFirstHalf(90);
             m_dsdDecoder->m_fsmState = DSDDecoder::DSDprocessDMRdata;
             return;
         }
         else if (syncEngine.isMatching(DSDSync::SyncDMRVoiceBS))
         {
-//		    std::cerr << "DSDDMR::processSyncOrSkip: voice sync" << std::endl;
+//    DSD_LOG("DSDDMR::processSyncOrSkip: voice sync");
             processVoiceFirstHalf(90);
             m_dsdDecoder->m_fsmState = DSDDecoder::DSDprocessDMRvoice;
             return;
@@ -454,7 +457,7 @@ void DSDDMR::processVoiceMS()
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
         m_voice1FrameCount++;
-//        std::cerr << "DSDDMR::processVoiceMS: " << m_symbolIndex << " : " << m_voice1FrameCount << std::endl;
+//    DSD_LOG("DSDDMR::processVoiceMS: " << m_symbolIndex << " : " << m_voice1FrameCount);
 
         if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
         {
@@ -480,7 +483,7 @@ void DSDDMR::processSkipMS()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
-//        std::cerr << "DSDDMR::processSkipMS: " << m_symbolIndex << std::endl;
+//    DSD_LOG("DSDDMR::processSkipMS: " << m_symbolIndex);
         // return to voice super frame
         m_dsdDecoder->m_dsdSymbol.setNoSignal(false);
         m_dsdDecoder->m_fsmState = DSDDecoder::DSDprocessDMRvoiceMS;
@@ -496,7 +499,7 @@ void DSDDMR::processDataFirstHalf(unsigned int shiftBack)
 {
     unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(shiftBack);
 
-//    std::cerr << "DSDDMR::processDataFirstHalf" << std::endl;
+//    DSD_LOG("DSDDMR::processDataFirstHalf");
 
     for (m_symbolIndex = 0; m_symbolIndex < 90; m_symbolIndex++, m_cachSymbolIndex++)
     {
@@ -508,7 +511,7 @@ void DSDDMR::processDataFirstHalfMS()
 {
     unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(78+1);
 
-//    std::cerr << "DSDDMR::processDataFirstHalfMS" << std::endl;
+//    DSD_LOG("DSDDMR::processDataFirstHalfMS");
 
     for (m_symbolIndex = 12; m_symbolIndex < 90; m_symbolIndex++, m_cachSymbolIndex++)
     {
@@ -520,7 +523,7 @@ void DSDDMR::processVoiceFirstHalf(unsigned int shiftBack)
 {
     unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(shiftBack);
 
-//    std::cerr << "DSDDMR::processVoiceFirstHalf" << std::endl;
+//    DSD_LOG("DSDDMR::processVoiceFirstHalf");
 
     for (m_symbolIndex = 0; m_symbolIndex < 90; m_symbolIndex++, m_cachSymbolIndex++)
     {
@@ -588,10 +591,7 @@ void DSDDMR::processDataDibit(unsigned char dibit)
             {
                 decodeCACH(m_cachBits);
 
-                //std::cerr << "DSDDMR::processDataDibit: start frame:"
-                //        << " slot: " << (int) m_slot
-                //        << " VC1: " << m_voice1FrameCount
-                //        << " VC2: " << m_voice2FrameCount << std::endl;
+                //DSD_LOG("DSDDMR::processDataDibit: start frame: slot: " << (int) m_slot << " VC1: " << m_voice1FrameCount << " VC2: " << m_voice2FrameCount);
             }
         }
         return;
@@ -601,7 +601,7 @@ void DSDDMR::processDataDibit(unsigned char dibit)
     nextPartOff += IN_DIBITS(DMR_DATA_PART_LEN);
     if (m_symbolIndex < nextPartOff)
     {
-        // TODO
+        m_dataDibits[m_symbolIndex - IN_DIBITS(DMR_CACH_LEN)] = dibit;
         return;
     }
 
@@ -641,7 +641,30 @@ void DSDDMR::processDataDibit(unsigned char dibit)
     nextPartOff += IN_DIBITS(DMR_DATA_PART_LEN);
     if (m_symbolIndex < nextPartOff)
     {
-        // TODO
+        int dataSecIdx = IN_DIBITS(DMR_DATA_PART_LEN) + (m_symbolIndex - (nextPartOff - IN_DIBITS(DMR_DATA_PART_LEN)));
+        m_dataDibits[dataSecIdx] = dibit;
+
+        if (m_symbolIndex == nextPartOff - 1)
+        {
+            unsigned char infoBits[96];
+            if (decodeBPTC196_96(infoBits))
+            {
+                switch (m_dataType)
+                {
+                    case DSDDMRDataCSBK:
+                        decodeCSBK(infoBits);
+                        break;
+                    case DSDDMRDataMBCHeader:
+                        decodeMBCHeader(infoBits);
+                        break;
+                    case DSDDMRDataMBCContinuation:
+                        decodeMBCContinuation(infoBits);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
         return;
     }
 }
@@ -695,10 +718,7 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
                     }
                 }
 
-    //            std::cerr << "DSDDMR::processVoiceDibit: start frame:"
-    //                    << " slot: " << (int) m_slot
-    //                    << " VC1: " << m_voice1FrameCount
-    //                    << " VC2: " << m_voice2FrameCount << std::endl;
+    //            DSD_LOG("DSDDMR::processVoiceDibit: start frame: slot: " << (int) m_slot << " VC1: " << m_voice1FrameCount << " VC2: " << m_voice2FrameCount);
             }
         }
         return;
@@ -820,10 +840,7 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
                     if (processVoiceEmbeddedSignalling(m_voice1EmbSig_dibitsIndex, m_voice1EmbSigRawBits, m_voice1EmbSig_OK, m_slot1Addresses))
                     {
                         textVoiceEmbeddedSignalling(m_slot1Addresses, m_dsdDecoder->m_state.slot0light);
-//                        std::cerr << "DSDDMR::processVoiceDibit: "
-//                                << " source: " << m_slot1Addresses.m_source
-//                                << " target: " << m_slot1Addresses.m_target
-//                                << " group: " << m_slot1Addresses.m_group << std::endl;
+//                        DSD_LOG("DSDDMR::processVoiceDibit: source: " << m_slot1Addresses.m_source << " target: " << m_slot1Addresses.m_target << " group: " << m_slot1Addresses.m_group);
                     }
                 }
             }
@@ -834,10 +851,7 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
                     if (processVoiceEmbeddedSignalling(m_voice2EmbSig_dibitsIndex, m_voice2EmbSigRawBits, m_voice2EmbSig_OK, m_slot2Addresses))
                     {
                         textVoiceEmbeddedSignalling(m_slot2Addresses, m_dsdDecoder->m_state.slot1light);
-//                        std::cerr << "DSDDMR::processVoiceDibit: "
-//                                << " source: " << m_slot2Addresses.m_source
-//                                << " target: " << m_slot2Addresses.m_target
-//                                << " group: " << m_slot2Addresses.m_group << std::endl;
+//                        DSD_LOG("DSDDMR::processVoiceDibit: source: " << m_slot2Addresses.m_source << " target: " << m_slot2Addresses.m_target << " group: " << m_slot2Addresses.m_group);
                     }
                 }
             }
@@ -941,9 +955,7 @@ void DSDDMR::decodeCACH(unsigned char *cachBits)
     if (m_continuation)
     {
         m_slot = (DSDDMRSlot) (((int) m_slot + 1) % 2);
-//        std::cerr << "DSDDMR::decodeCACH: cach: " << " CC:"
-//                << " at: " << m_cachSymbolIndex
-//                << " slot: " << ((int) m_slot) << std::endl;
+//        DSD_LOG("DSDDMR::decodeCACH: CC: at: " << m_cachSymbolIndex << " slot: " << (int) m_slot);
         m_continuation = false;
         m_cachSymbolIndex = 0; // restart counting
     }
@@ -969,7 +981,7 @@ void DSDDMR::decodeCACH(unsigned char *cachBits)
             m_slot = (DSDDMRSlot) slotIndex;
             m_lcss = 2*cachBits[2] + cachBits[3];
 
-//            std::cerr << "DSDDMR::decodeCACH: cach: " << " OK: at: " << m_cachSymbolIndex << " Slot: " << (int) cachBits[1] << " LCSS: " << (int) m_lcss << std::endl;
+//            DSD_LOG("DSDDMR::decodeCACH: OK: at: " << m_cachSymbolIndex << " Slot: " << (int) cachBits[1] << " LCSS: " << (int) m_lcss);
 
             m_cachSymbolIndex = 0; // restart counting
         }
@@ -977,7 +989,7 @@ void DSDDMR::decodeCACH(unsigned char *cachBits)
         {
             m_slot = DSDDMRSlotUndefined;
             m_cachOK = false;
-//            std::cerr << "DSDDMR::decodeCACH: cach: " << " KO: at: " << m_cachSymbolIndex << std::endl;
+//            DSD_LOG("DSDDMR::decodeCACH: KO: at: " << m_cachSymbolIndex);
         }
     }
 }
@@ -1010,13 +1022,12 @@ void DSDDMR::processSlotTypePDU()
             memcpy(&m_slotText[4], m_slotTypeText[dataType], 3);
         }
 
-        //std::cerr << "DSDDMR::processSlotTypePDU OK: CC: " << (int) m_colorCode << " DT: " << dataType << std::endl;
-        //TRACE("DT: %s\r\n", m_slotText);
+        if (m_verbosity > 2) DSD_LOG("DT: " << m_slotText);
     }
     else
     {
         memcpy(&m_slotText[1], "-- UNK", 6);
-        //std::cerr << "DSDDMR::processSlotTypePDU KO" << std::endl;
+        if (m_verbosity > 1) DSD_LOG("DSDDMR::processSlotTypePDU KO");
     }
 }
 
@@ -1150,7 +1161,7 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
             }
             else
             {
-                std::cerr << "DSDDMR::processVoiceEmbeddedSignalling: decode error" << std::endl;
+                DSD_LOG("DSDDMR::processVoiceEmbeddedSignalling: decode error");
                 voiceEmbSig_OK = false;
             }
         }
@@ -1202,5 +1213,367 @@ unsigned char DSDDMR::getColorCode() const
     return m_dsdDecoder->m_state.ccnum;
 }
 
-} // namespace DSDcc
+// ========================================================================================
+// BPTC(196,96) decoder – ETSI TS 102 361-1 §B.1
+// ========================================================================================
 
+// Hamming(13,9,3) single-bit error correction – adapted from MMDVM CHamming::decode1393
+// Used for BPTC(196,96) column correction.
+static bool hamming1393(unsigned char *d)
+{
+    unsigned char c0 = d[0] ^ d[1] ^ d[3] ^ d[5] ^ d[6];
+    unsigned char c1 = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7];
+    unsigned char c2 = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
+    unsigned char c3 = d[0] ^ d[2] ^ d[4] ^ d[5] ^ d[8];
+
+    unsigned char n = 0;
+    if (c0 != d[9])  n |= 0x01U;
+    if (c1 != d[10]) n |= 0x02U;
+    if (c2 != d[11]) n |= 0x04U;
+    if (c3 != d[12]) n |= 0x08U;
+
+    switch (n) {
+        case 0x01U: d[9]  ^= 1U; return true;
+        case 0x02U: d[10] ^= 1U; return true;
+        case 0x04U: d[11] ^= 1U; return true;
+        case 0x08U: d[12] ^= 1U; return true;
+        case 0x0FU: d[0]  ^= 1U; return true;
+        case 0x07U: d[1]  ^= 1U; return true;
+        case 0x0EU: d[2]  ^= 1U; return true;
+        case 0x05U: d[3]  ^= 1U; return true;
+        case 0x0AU: d[4]  ^= 1U; return true;
+        case 0x0DU: d[5]  ^= 1U; return true;
+        case 0x03U: d[6]  ^= 1U; return true;
+        case 0x06U: d[7]  ^= 1U; return true;
+        case 0x0CU: d[8]  ^= 1U; return true;
+        default:    return false;
+    }
+}
+
+bool DSDDMR::decodeBPTC196_96(unsigned char *infoBits)
+{
+    // Step 1: unpack 98 stored dibits to 196 channel bits
+    unsigned char channelBits[196];
+    for (int i = 0; i < 98; i++)
+    {
+        channelBits[2*i]     = (m_dataDibits[i] >> 1) & 1;
+        channelBits[2*i + 1] =  m_dataDibits[i] & 1;
+    }
+
+    // Step 2: deinterleave – gather: deInterData[a] = channelBits[(a*181)%196]
+    // Per ETSI TS 102 361-1 §B.1 and MMDVM reference implementation.
+    unsigned char deInterData[196] = {};
+    for (unsigned int a = 0; a < 196; a++)
+        deInterData[a] = channelBits[(a * 181U) % 196U];
+
+    // Matrix layout (ETSI BPTC(196,96), 13 rows × 15 cols + 1 R bit = 196 bits):
+    //   deInterData[0]          = R(3) padding bit (ignored)
+    //   deInterData[1..195]     = 13 rows × 15 cols
+    //     Rows 0-8  (data rows): each is a Hamming(15,11,3) codeword
+    //       row 0 cols 0-2 = R bits; cols 3-10 = data; cols 11-14 = Hamming parity
+    //       rows 1-8 cols 0-10 = data; cols 11-14 = Hamming parity
+    //     Rows 9-12 (col parity rows): 4 parity bits for each column's Hamming(13,9,3)
+    //   Column c has 13 values: deInterData[c+1 + 15*a] for a=0..12
+    //     first 9 values (a=0..8) are data, last 4 (a=9..12) are Hamming(13,9) parity
+
+    // Step 3: iterative column + row Hamming correction (MMDVM-style, up to 5 passes).
+    //
+    // Column correction (Hamming(13,9,3)) handles rows with multiple bit errors that
+    // row-only correction cannot fix (e.g. 2 errors split across different columns).
+    // After column correction reduces multi-bit row errors to single-bit errors, the
+    // row Hamming(15,11,3) pass finishes the job.
+    //
+    // Safety: rows 7 and 8 (the CRC bytes, deInter positions c+1+15*7 and c+1+15*8)
+    // are excluded from column write-back. If the column parity rows (9-12) are noisy,
+    // a false column correction could corrupt the stored CRC; row-only correction is
+    // reliable enough for those two rows and this guard costs nothing on clean signals.
+    bool fixing;
+    unsigned int pass = 0;
+    do {
+        fixing = false;
+
+        // Column Hamming(13,9,3) pass – 15 columns
+        for (unsigned int c = 0; c < 15; c++)
+        {
+            unsigned char col[13];
+            for (unsigned int r = 0; r < 13; r++)
+                col[r] = deInterData[c + 1 + 15 * r];
+
+            if (hamming1393(col))
+            {
+                for (unsigned int r = 0; r < 13; r++)
+                {
+                    //if (r == 7 || r == 8) continue; // guard CRC bytes
+                    unsigned int idx = c + 1 + 15 * r;
+                    if (deInterData[idx] != col[r])
+                    {
+                        deInterData[idx] = col[r];
+                        fixing = true;
+                    }
+                }
+            }
+        }
+
+        // Row Hamming(15,11,3) pass – 9 data rows
+        for (int r = 0; r < 9; r++)
+        {
+            if (m_hamming_15_11.decode(&deInterData[1 + r * 15], nullptr, 1))
+                fixing = true;
+        }
+
+        pass++;
+    } while (fixing && pass < 5);
+
+    // Step 4: extract 96 data bits from the corrected deinterleaved matrix
+    //   row 0, cols 3-10 → deInterData[4..11]        (8 bits; R bits at cols 0-2)
+    //   rows 1-8, cols 0-10 → deInterData[1+r*15 .. 11+r*15]  (11 bits each)
+    int pos = 0;
+    for (int a = 4; a <= 11; a++)
+        infoBits[pos++] = deInterData[a];
+    for (int r = 1; r <= 8; r++)
+        for (int a = 0; a <= 10; a++)
+            infoBits[pos++] = deInterData[1 + r * 15 + a];
+    // pos == 96
+
+    return true;
+}
+
+// ========================================================================================
+// CSBK / MBC decoders
+// ========================================================================================
+
+static const char *csbkoName(unsigned char csbko)
+{
+    // Tier III aliases from ETSI TS 102 361-4 v1.12.1 (tables 7.1-7.4)
+    // plus a few legacy labels kept for compatibility with existing logs.
+    switch (csbko)
+    {
+        case 0x00: return "BS OutAct ";
+        case 0x01: return "UU VoReq  ";
+        case 0x02: return "UU VoAns  ";
+        case 0x03: return "NACK      ";
+        case 0x04: return "UU D-Grant";
+        case 0x05: return "UU D-ChanG";
+        case 0x06: return "RChk Req  ";
+        case 0x07: return "RChk Rsp  ";
+        case 0x08: return "CallAlert ";
+        case 0x09: return "CallAltNAK";
+        case 0x0A: return "CallAlert ";
+        case 0x0B: return "GV VoReq  ";
+        case 0x0C: return "GV VoAns  ";
+        case 0x0D: return "GV VoTerm ";
+        case 0x0E: return "GV VoCont ";
+        case 0x14: return "UU VoCGrt ";
+        case 0x15: return "UU VoCGUpd";
+        case 0x18: return "GV VoCGrt ";
+        case 0x19: return "C_ALOHA   ";
+        case 0x1A: return "GV CGrtExp";
+        case 0x1C: return "C_AHOY    ";
+        case 0x1D: return "AnnUpBS   ";
+        case 0x1E: return "C_ACKVIT  ";
+        case 0x1F: return "C_RAND    ";
+        case 0x20: return "C_ACKD    ";
+        case 0x21: return "Preamble  ";
+        case 0x22: return "P_ACKD    ";
+        case 0x23: return "P_ACKU    ";
+        case 0x28: return "C_BCAST   ";
+        case 0x2A: return "P_MAINT   ";
+        case 0x2E: return "P_CLEAR   ";
+        case 0x2F: return "P_PROTECT ";
+        case 0x30: return "PV_GRANT  ";
+        case 0x31: return "TV_GRANT  ";
+        case 0x32: return "BTV_GRANT ";
+        case 0x33: return "PD_GRANT  ";
+        case 0x34: return "TD_GRANT  ";
+        case 0x35: return "PV_GRANTDX";
+        case 0x36: return "PD_GRANTDX";
+        case 0x39: return "C_MOVE    ";
+        default:   return nullptr;
+    }
+}
+
+static uint16_t crcCCITT16(const unsigned char *bytes, int len, uint16_t init)
+{
+    uint16_t crc = init;
+    for (int i = 0; i < len; i++)
+    {
+        crc ^= (uint16_t)bytes[i] << 8;
+        for (int j = 0; j < 8; j++)
+            crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+    }
+    return crc;
+}
+
+static bool csbkCRCOK(const unsigned char *infoBits, uint16_t mask, int verbosity)
+
+{
+    // Pack all 96 bits into 12 bytes MSB-first
+    unsigned char bytes[12] = {0};
+    for (int i = 0; i < 96; i++)
+        bytes[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+
+    // CRC-CCITT-16 over bytes[0..9], then ETSI post-CRC mask (TS 102 361-1 §B.3.12).
+    uint16_t raw = crcCCITT16(bytes, 10, 0x0000);
+    uint16_t computed = raw ^ 0xFFFF ^ mask;
+
+    uint16_t received  = ((uint16_t)bytes[10] << 8) | bytes[11];
+    
+    if (computed != received)
+    {
+        uint16_t inferredMask = raw ^ 0xFFFF ^ received;
+
+        if (verbosity > 0)
+        {
+            DSD_LOG("CRC FAIL: received=0x" << std::hex << std::setw(4) << received
+                << " computed=0x" << std::setw(4) << computed
+                //<< " raw=0x" << std::setw(4) << raw
+                << " mask=0x" << std::setw(4) << mask
+                << " inferredMask=0x" << std::setw(4) << inferredMask
+                << std::dec);
+        }
+    }
+
+    return computed == received;
+}
+
+static unsigned int bitsToUint(const unsigned char *bits, int nbBits)
+{
+    unsigned int v = 0;
+    for (int i = 0; i < nbBits; i++) v = (v << 1) | bits[i];
+    return v;
+}
+
+void DSDDMR::decodeCSBK(const unsigned char *infoBits)
+{
+    unsigned char lb    = infoBits[0];
+    unsigned char csbko = (unsigned char) bitsToUint(&infoBits[2], 6);
+    unsigned char mfid  = (unsigned char) bitsToUint(&infoBits[8], 8);
+
+    // Verify CRC-CCITT-16 with TS 102 361-1 §B.3.12 CSBK mask.
+    bool crcOK = csbkCRCOK(infoBits, 0xA5A5, m_verbosity);
+
+    const char* name = nullptr;
+    if (mfid == 0x00) name = csbkoName(csbko);
+
+	bool log = true;
+    std::ostringstream msg;
+    msg << "CSBK["
+        << (m_slot == DSDDMRSlot1 ? "1" : "2")
+        << "] "
+        << (name ? name : "Unknown   ")
+        << " CSBKO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)csbko
+        << " MFId=0x"  << std::setw(2) << (int)mfid
+        << std::dec
+        << (crcOK ? "" : " CRC-FAIL");
+
+    if (mfid == 0x00) // ETSI standard opcodes
+    {
+        if (csbko == 0x19) // C_ALOHA (TS 102 361-4 v1.12.1 Table 7.19)
+        {
+            unsigned int version          = bitsToUint(&infoBits[19], 3);
+            unsigned int tsccas           = bitsToUint(&infoBits[17], 1);
+            unsigned int siteSync         = bitsToUint(&infoBits[18], 1);
+            unsigned int offset           = bitsToUint(&infoBits[22], 1);
+            unsigned int activeConnection = bitsToUint(&infoBits[23], 1);
+            unsigned int mask             = bitsToUint(&infoBits[24], 5);
+            unsigned int serviceFunction  = bitsToUint(&infoBits[29], 2);
+            unsigned int nrandWait        = bitsToUint(&infoBits[31], 4);
+            unsigned int reg              = bitsToUint(&infoBits[35], 1);
+            unsigned int backoff          = bitsToUint(&infoBits[36], 4);
+            unsigned int sic              = bitsToUint(&infoBits[40], 16);
+            unsigned int msAddress        = bitsToUint(&infoBits[56], 24);
+
+            msg << " Ver=" << version
+                << " TSCCAS=" << tsccas
+                << " Sync=" << siteSync
+                << " Offs=" << offset
+                << " Net=" << activeConnection
+                << " Mask=" << mask
+                << " SF=" << serviceFunction
+                << " NW=" << nrandWait
+                << " Reg=" << reg
+                << " Backoff=" << backoff
+                << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
+                << " MS=" << msAddress;
+			log = false; // too much info for regular logs, but useful for debugging
+        }
+        else if (csbko == 0x21) // Preamble CSBKs
+        {
+            unsigned char groupFlag    = infoBits[17];
+            unsigned char dataFlag     = infoBits[18];
+            unsigned int  blocksToFollow = bitsToUint(&infoBits[24], 6);
+            unsigned int  dst = bitsToUint(&infoBits[56], 24);
+            msg << " BTF=" << blocksToFollow
+                << " " << (groupFlag ? "G" : "U") << (dataFlag ? "D" : "V")
+                << " Dst=" << dst;
+        }
+        else
+        {
+            // Generic: destination at bits[32..55], source at bits[56..79]
+            unsigned int dst = bitsToUint(&infoBits[32], 24);
+            unsigned int src = bitsToUint(&infoBits[56], 24);
+            msg << " Src=" << src << " Dst=" << dst;
+        }
+    }
+    else
+    {
+        // Non-standard: raw hex of CSBK-specific bytes (bits 16–79)
+        msg << " Data=";
+        unsigned char raw[8] = {0};
+        for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
+        for (int i = 0; i < 8; i++)
+        {
+            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        }
+        msg << std::dec;
+    }
+
+    msg << " LB=" << (int)lb;
+    if (log) DSD_LOG(msg.str());
+
+    // Update slot text: "[act][CC] CSB [opHex] [dst7]"
+    char opBuf[20];
+    unsigned int dst = bitsToUint(&infoBits[(csbko == 0x21 || csbko == 0x19) ? 56 : 32], 24);
+    snprintf(opBuf, sizeof(opBuf), "%02X %7u", (unsigned)csbko, dst);
+    memcpy(&m_slotText[8], opBuf, 10);
+}
+
+void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
+{
+    unsigned char csbko = (unsigned char) bitsToUint(&infoBits[2], 6);
+    unsigned char mfid  = (unsigned char) bitsToUint(&infoBits[8], 8);
+    bool crcOK = csbkCRCOK(infoBits, 0xAAAA, m_verbosity); // TS 102 361-1 §B.3.12
+
+    unsigned int dst = bitsToUint(&infoBits[32], 24);
+    unsigned int src = bitsToUint(&infoBits[56], 24);
+
+    DSD_LOG("MBC-Hdr["
+        << (m_slot == DSDDMRSlot1 ? "1" : "2")
+        << "] CSBKO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)csbko
+        << " MFId=0x" << std::setw(2) << (int)mfid
+        << std::dec
+        << " Src=" << src << " Dst=" << dst
+        << (crcOK ? "" : " CRC-FAIL"));
+
+    char opBuf[20];
+    snprintf(opBuf, sizeof(opBuf), "%02X %7u", (unsigned)csbko, dst);
+    memcpy(&m_slotText[8], opBuf, 10);
+}
+
+void DSDDMR::decodeMBCContinuation(const unsigned char *infoBits)
+{
+    // Pack 96 bits into 12 bytes and log as hex
+    unsigned char raw[12] = {0};
+    for (int i = 0; i < 96; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+
+    std::ostringstream msg;
+    msg << "MBC-Cont[" << (m_slot == DSDDMRSlot1 ? "1" : "2") << "] ";
+    for (int i = 0; i < 12; i++)
+    {
+        msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        if (i % 4 == 3) msg << " ";
+    }
+    DSD_LOG(msg.str());
+}
+
+} // namespace DSDcc

@@ -25,6 +25,11 @@
 #include "p25p1_heuristics.h"
 #include "export.h"
 
+#include <chrono>
+#include <cstdint>
+#include <mutex>
+#include <vector>
+
 namespace DSDcc
 {
 
@@ -70,6 +75,72 @@ public:
         unsigned short crc;     //!< CRC-16 (16 bits)
     };
 
+    // Snapshot of decoded P25 network state — safe to read from any thread via getNetworkStateCopy().
+    struct P25NetworkState
+    {
+        // From NID (decoded on every frame)
+        uint16_t nac = 0;
+
+        // From NET_STS_BCST (0x3B)
+        uint8_t  lra = 0;
+        uint32_t wacnId = 0;
+        uint16_t netSystemId = 0;
+        uint16_t netChannel = 0;
+        uint8_t  netServiceClass = 0;
+
+        // From RFSS_STS_BCST (0x3A)
+        uint8_t  rfssFlags = 0;       //!< bit7=ROAM, bit6=ELK
+        uint16_t rfssSystemId = 0;
+        uint8_t  rfssId = 0;
+        uint8_t  siteId = 0;
+        uint16_t rfssChannel = 0;
+        uint8_t  rfssServiceClass = 0;
+
+        // Channel identifier table entries (from IDEN_UP_*, indexed 0-15 by identifier field)
+        struct ChannelIdent {
+            bool    valid = false;
+            int64_t baseFreqHz = 0;
+            int64_t spacingHz = 0;
+            int64_t txOffsetHz = 0;
+            int32_t bwHz = 0;           //!< Bandwidth (0 for VU type — use spacingHz)
+            int     slotsPerCarrier = 1;
+            bool    isTDMA = false;
+        };
+        ChannelIdent channelIdents[16] = {};
+
+        // Active voice channels from GRP_V_CH_GRANT (0x00); expired after 10 s of inactivity
+        struct ActiveChannel {
+            uint16_t channel = 0;
+            uint16_t tgid = 0;
+            uint32_t srcAddr = 0;
+            uint64_t lastSeenMs = 0;    //!< std::chrono::steady_clock milliseconds since epoch
+            bool     encrypted = false; //!< ServiceOpts bit 6 from channel grant
+        };
+        std::vector<ActiveChannel> activeChannels;
+
+        // All talk groups observed on channel grants; never expires
+        struct DiscoveredTalkGroup {
+            uint16_t tgid = 0;
+            uint64_t firstSeenMs = 0;
+            uint64_t lastSeenMs = 0;
+            uint32_t callCount = 0;
+            bool     encrypted = false; //!< true if the most recent grant for this TG was encrypted
+        };
+        std::vector<DiscoveredTalkGroup> discoveredTalkGroups;
+
+        // Cumulative counters — not reset on sync loss
+        uint32_t tsbkTotalCount = 0;
+        uint32_t crcOkCount = 0;
+        uint32_t crcFailCount = 0;
+        uint32_t trellisFailCount = 0;
+    };
+
+    P25NetworkState getNetworkStateCopy() const
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        return m_networkState;
+    }
+
 
     DSDP25P1(DSDDecoder *dsdDecoder);
     ~DSDP25P1();
@@ -104,7 +175,18 @@ private:
     void processESFrame();
 
     void processTSBKOpcode(TSBK& tsbk);
+    void processTSBKOpcodeMoto(TSBK& tsbk);
     void processNetworkStatusBroadcast(TSBK& tsbk);
+    void processGroupVoiceChannelGrant(TSBK& tsbk);
+    void processGroupVoiceChannelGrantUpdate(TSBK& tsbk);
+    void processTimeDateAnnouncement(TSBK& tsbk);
+    void processIndividualDataRequest(TSBK& tsbk);
+    void processIdenUpdateTDMA(TSBK& tsbk);
+    void processIdenUpdateVU(TSBK& tsbk);
+    void processIdenUpdate(TSBK& tsbk);
+    void processSecondaryControlChannelBroadcast(TSBK& tsbk);
+    void processRFSSStatusBroadcast(TSBK& tsbk);
+    void processAdjacentStatusBroadcast(TSBK& tsbk);
     
     void extractIMBE(unsigned char* imbeFrame, int frameIndex);
     void extractLinkControl();
@@ -175,6 +257,10 @@ private:
     static const int m_lcMap[12];
     static const int m_esMap[4];
 	static const unsigned int _dataPktMap[98];  //!< Deinterleave table for data and TSBK frames, ref BAAA 7.2
+
+    // Network state (written on DSP thread, read via getNetworkStateCopy() under mutex)
+    mutable std::mutex m_stateMutex;
+    P25NetworkState    m_networkState;
 
     
     

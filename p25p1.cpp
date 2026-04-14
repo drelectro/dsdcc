@@ -19,8 +19,11 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include "p25p1.h"
+#include "dsd_logger.h"
 #include "dsd_decoder.h"
+#include <algorithm>
 #include <vector>
+#include <sstream>
 
 // Suppress sprintf warnings
 #pragma warning(disable: 4996)
@@ -107,6 +110,7 @@ void DSDP25P1::init()
     memset(m_lcData, 0, sizeof(m_lcData));
     memset(m_esData, 0, sizeof(m_esData));
     memset(m_statusData, 0, sizeof(m_statusData));
+    memset(_deinterleavedDibits, 0, sizeof(_deinterleavedDibits));
 
 	// The first thing we expect is a Network Identifier (NID) 
     _symbolsExpected = 8 * 4; // 8 Octets for NID
@@ -148,8 +152,8 @@ void DSDP25P1::process()
         if (bitPosition == 6) _frameData[byteIndex] = 0; // Clear byte at start of new dibit
         _frameData[byteIndex] |= dibit << bitPosition;   // Set dibit in byte
     }
-    else if (m_frameType = P25P1FrameTSBK)
-    {
+	else if (m_frameType == P25P1FrameTSBK)
+	{
 		_deinterleavedDibits[_dataPktMap[m_symbolIndex]] = dibit;
 	}
 
@@ -192,6 +196,10 @@ void DSDP25P1::processNID()
     {
         m_nac = (_frameData[0] << 4) | (_frameData[1] >> 4);
         m_duid = _frameData[1] & 0x0F;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_networkState.nac = (uint16_t)m_nac;
+        }
         
         //TRACE("P25: NAC %d DUID %0X\n", m_nac, m_duid);
 
@@ -200,30 +208,30 @@ void DSDP25P1::processNID()
         {
         case 0x0:
             m_frameType = P25P1FrameHDU;
-            TRACE("P25: Header Data Unit (HDU)\n");
+            //TRACE("P25: Header Data Unit (HDU)\n");
             break;
         case 0x3:
             m_frameType = P25P1FrameTDULC;
-            TRACE("P25: Terminator Data Unit with Link Control (TDULC)\n");
+            //TRACE("P25: Terminator Data Unit with Link Control (TDULC)\n");
             break;
         case 0x5:
             m_frameType = P25P1FrameLDU1;
             m_dsdDecoder->m_voice1On = true;
-            TRACE("P25: Logical Data Unit 1 (LDU1) - Voice\n");
+            //TRACE("P25: Logical Data Unit 1 (LDU1) - Voice\n");
             break;
         case 0x7:
             m_frameType = P25P1FrameTSBK;
             _symbolsExpected = 98; // 196 bits
             //TRACE("P25: Trunking System Block (TSBK)\n");
             break;
-        case 0x9:
-            m_frameType = P25P1FramePDU;
-            TRACE("P25: Packet Data Unit (PDU)\n");
-            break;
         case 0xA:
             m_frameType = P25P1FrameLDU2;
             m_dsdDecoder->m_voice1On = true;
-            TRACE("P25: Logical Data Unit 2 (LDU2) - Voice\n");
+            //TRACE("P25: Logical Data Unit 2 (LDU2) - Voice\n");
+            break;
+        case 0xC:
+            m_frameType = P25P1FramePDU;
+            //TRACE("P25: Packet Data Unit (PDU)\n");
             break;
         case 0xF:
             m_frameType = P25P1FrameTDU;
@@ -314,7 +322,7 @@ void DSDP25P1::processLDU1()
             extractLinkControl();
         }
     }
-    else if (m_symbolIndex < 1728) // Status symbols (72 dibits)
+    else if (m_symbolIndex <= 1728) // Status symbols (72 dibits)
     {
         if (m_symbolIndex == 1656)
         {
@@ -331,6 +339,9 @@ void DSDP25P1::processLDU1()
             processHeuristics();
             m_dsdDecoder->resetFrameSync();
         }
+    }
+    else {
+        m_dsdDecoder->resetFrameSync();
     }
 }
 
@@ -359,7 +370,7 @@ void DSDP25P1::processLDU2()
             extractEncryptionSync();
         }
     }
-    else if (m_symbolIndex < 1728) // Status symbols
+    else if (m_symbolIndex <= 1728) // Status symbols
     {
         int statusIndex = m_symbolIndex - 1656;
         m_statusData[statusIndex / 4] |= m_dsdDecoder->m_dsdSymbol.getDibit() << (6 - (statusIndex % 4) * 2);
@@ -371,6 +382,9 @@ void DSDP25P1::processLDU2()
             processHeuristics();
             m_dsdDecoder->resetFrameSync();
         }
+    }
+    else {
+		m_dsdDecoder->resetFrameSync();
     }
 }
 
@@ -416,7 +430,7 @@ void DSDP25P1::processVoiceFrame(int frameIndex)
             // Store for DVSI - Fix: Check bounds properly
             if (frameIndex < 18 && frameIndex < (int)(sizeof(m_dsdDecoder->m_mbeDVFrame1)))
             {
-                size_t copySize = std::min(sizeof(m_dsdDecoder->m_mbeDVFrame1) - frameIndex, (size_t)11);
+                size_t copySize = (std::min)(sizeof(m_dsdDecoder->m_mbeDVFrame1) - frameIndex, (size_t)11);
                 memcpy(&m_dsdDecoder->m_mbeDVFrame1[frameIndex], m_imbeFrame[frameIndex], copySize);
                 m_dsdDecoder->m_mbeDVReady1 = true;
             }
@@ -495,18 +509,30 @@ void DSDP25P1::processTSBK()
     // Trunking System Block - control signaling
     // Ref: TIA-102.AABB-B and TIA-102.AABC-B
 
-    // TSBK is encoded with 1/2 rate Trellis coding
-    if (decodeTrellis_1_2() == false)
-    {
-        TRACE("P25: TSBK decode error\n");
-        m_dsdDecoder->resetFrameSync();
-		return; // Decode error, return failure
-    }
+    // TSBK is encoded with 1/2 rate Trellis coding; decodeTrellis_1_2 always
+    // produces a best-effort output — CRC is the final validity gate.
+    decodeTrellis_1_2();
+
 	// Now we have the decoded TSBK data in _frameData
  
     // Check CRC-16 on decoded data (first 10 bytes data + 2 bytes CRC)
     unsigned short receivedCRC = (_frameData[10] << 8) | _frameData[11];
     unsigned short calculatedCRC = (unsigned short)m_crcP25.crcbitbybit(_frameData, 10);
+    bool crcOk = (receivedCRC == calculatedCRC);
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.tsbkTotalCount++;
+        if (crcOk) m_networkState.crcOkCount++;
+        else        m_networkState.crcFailCount++;
+    }
+
+    if (!crcOk)
+    {
+        TRACE("P25: TSBK CRC fail\n");
+        m_dsdDecoder->resetFrameSync();
+        return;
+    }
 
     // Extract TSBK fields from decoded data
     TSBK tsbk;
@@ -519,13 +545,17 @@ void DSDP25P1::processTSBK()
     unsigned char pf = (tsbk.opcode >> 6) & 0x01; // Protected Flag
     tsbk.opcode &= 0x3F; // Clear flags, keep opcode
 
-    TRACE("P25: TSBK(%c%c) Opcode: 0x%02X MFID: 0x%02X CRC: %s\n",
-        lb ? 'L' : '-', pf ? 'P' : '-', tsbk.opcode, tsbk.mfId,
-        (receivedCRC == calculatedCRC) ? "OK" : "FAIL");
+    //TRACE("P25: TSBK(%c%c) Opcode: 0x%02X MFID: 0x%02X CRC: %s\n",
+    //    lb ? 'L' : '-', pf ? 'P' : '-', tsbk.opcode, tsbk.mfId,
+    //    crcOk ? "OK" : "FAIL");
 
     if (tsbk.mfId == 0x00 || tsbk.mfId == 0x01)
     {
         processTSBKOpcode(tsbk);
+    }
+    else if (tsbk.mfId == 0x90)
+    {
+        processTSBKOpcodeMoto(tsbk);
     }
     else
     {
@@ -537,23 +567,52 @@ void DSDP25P1::processTSBK()
 }
 void DSDP25P1::processTSBKOpcode(TSBK& tsbk)
 {
-    // Handle specific TSBK opcodes here
+	// Handle specific TSBK opcodes here - Ref: TIA-102.AABC-B for opcode definitions
     switch (tsbk.opcode)
     {
-    case 0x01: // Example opcode for system information
-		TRACE("P25: TSBK System Information MFID: 0x%02X\n", tsbk.mfId);
-        break;
-    case 0x02: // Example opcode for emergency
-		TRACE("P25: TSBK Emergency MFID: 0x%02X\n", tsbk.mfId);
-        break;
 
-    case 0x3B: // Network Status Broadcast
+	case 0x00: // GRP_V_CH_GRANT Group Voice Channel Grant (s5.1)
+		processGroupVoiceChannelGrant(tsbk);
+		break;
+
+	case 0x02: // GRP_V_CH_GRANT_UPDT Group Voice Channel Grant Update (s5.1)
+		processGroupVoiceChannelGrantUpdate(tsbk);
+		break;
+
+	case 0x16: // IND_DATA_REQ / SNDCP_CH_GRN Individual Data Service Request (s5.1)
+		processIndividualDataRequest(tsbk);
+		break;
+
+	case 0x30: // TIME_DATE_ANNC Time and Date Announcement (s6.2)
+		processTimeDateAnnouncement(tsbk);
+		break;
+
+    case 0x33: // IDEN_UP_TDMA Channel Identifier Update TDMA (s6.2)
+		processIdenUpdateTDMA(tsbk);
+		break;
+
+    case 0x34: // IDEN_UP_VU IDEN Update Voice Unit ID (s6.2)
+		processIdenUpdateVU(tsbk);
+		break;
+
+	case 0x39: // SCCB Secondary Control Channel Broadcast (s6.2)
+		processSecondaryControlChannelBroadcast(tsbk);
+		break;
+
+	case 0x3A: //RFSS_STS_BCST RF Subsystem Status Broadcast (s6.2)
+		processRFSSStatusBroadcast(tsbk);
+		break;
+
+	case 0x3B: // NET_STS_BCST Network Status Broadcast (s6.2)
 		processNetworkStatusBroadcast(tsbk);
         break;
 
-    case 0x3C: // Example opcode for channel grant
-		// Process channel grant
-       
+    case 0x3C: // ADJ_STS_BCST Adjacent Status Broadcast (s6.2)
+		processAdjacentStatusBroadcast(tsbk);
+		break;
+
+	case 0x3D: // IDEN_UP Channel Identifier Update (s6.2)
+		processIdenUpdate(tsbk);
 		break;
 
     default:
@@ -573,17 +632,420 @@ void DSDP25P1::processNetworkStatusBroadcast(TSBK& tsbk)
     //TRACE("P25: TSBK Network Status Broadcast: LRA:%d WACNID:%04X SystemID:%04X Channel:%d ServiceClass:%d\n",
     //    LRA, WACNID, SystemID, Channel, ServiceClass);
 
-    std::cerr << "P25: TSBK Network Status Broadcast: LRA:" << LRA
-              << " WACNID:" << std::hex << WACNID
-              << " SystemID:" << SystemID
-              << " Channel:" << Channel
-		<< " ServiceClass:" << ServiceClass << std::dec << std::endl;
+    //DSD_LOG("P25: TSBK Network Status Broadcast: LRA:" << LRA
+    //        << " WACNID:0x" << std::hex << WACNID
+    //        << " SystemID:0x" << SystemID
+    //        << " Channel:0x" << Channel
+    //        << " ServiceClass:0x" << ServiceClass);
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.lra            = (uint8_t)LRA;
+        m_networkState.wacnId         = (uint32_t)WACNID;
+        m_networkState.netSystemId    = (uint16_t)SystemID;
+        m_networkState.netChannel     = (uint16_t)Channel;
+        m_networkState.netServiceClass = (uint8_t)ServiceClass;
+    }
 }
+
+void DSDP25P1::processIndividualDataRequest(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s5.1 / SNDCP_CH_GRN
+    int ServiceOpts = tsbk.args[0];                            // Service options byte
+    int Channel1    = (tsbk.args[2] << 8) | tsbk.args[3];     // Transmit channel (ID + number)
+    int Channel2    = (tsbk.args[4] << 8) | tsbk.args[5];     // Receive channel (ID + number)
+
+    DSD_LOG("P25: TSBK Individual Data Request: ServiceOpts:0x" << std::hex << ServiceOpts
+            << " Ch1:0x" << Channel1
+            << " Ch2:0x" << Channel2);
+}
+
+void DSDP25P1::processIdenUpdateVU(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 IDEN_UP_VU - Channel Identifier Update (VHF/UHF)
+    int Identifier  = (tsbk.args[0] >> 4) & 0x0F;                                          // Channel identifier (4 bits)
+    int BWtype      = tsbk.args[0] & 0x0F;                                                  // Bandwidth type (4 bits)
+    int TXOffset0   = (tsbk.args[1] << 6) | ((tsbk.args[2] >> 2) & 0x3F);                  // TX offset raw (14 bits)
+    int Spacing     = ((tsbk.args[2] & 0x03) << 8) | tsbk.args[3];                         // Channel spacing (10 bits, units 125 Hz)
+    long BaseFreq   = ((long)tsbk.args[4] << 24) | ((long)tsbk.args[5] << 16)
+                    | ((long)tsbk.args[6] << 8)  | tsbk.args[7];                            // Base frequency (32 bits, units 5 Hz)
+
+    // Decode signed TX offset: bit 13 is sign (0 = negative offset, 1 = positive)
+    int toff_sign  = (TXOffset0 >> 13) & 0x1;
+    int toff_mag   = TXOffset0 & 0x1FFF;
+    long TXOffsetHz = (long)toff_mag * Spacing * 125;
+    if (toff_sign == 0)
+        TXOffsetHz = -TXOffsetHz;
+
+    //DSD_LOG("P25: TSBK IDEN Update VU: ID:" << Identifier
+    //        << " BW:" << BWtype
+    //        << " BaseFreq:" << (BaseFreq * 5) << "Hz"
+    //        << " Spacing:" << (Spacing * 125) << "Hz"
+    //        << " TXOffset:" << TXOffsetHz << "Hz");
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        auto& ci = m_networkState.channelIdents[Identifier & 0x0F];
+        ci.valid          = true;
+        ci.baseFreqHz     = BaseFreq * 5;
+        ci.spacingHz      = (int64_t)Spacing * 125;
+        ci.txOffsetHz     = TXOffsetHz;
+        ci.bwHz           = 0;      // BWtype is a coded value; use spacingHz for channel width
+        ci.slotsPerCarrier = 1;
+        ci.isTDMA         = false;
+    }
+}
+
+void DSDP25P1::processRFSSStatusBroadcast(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 RFSS_STS_BCST - RF Subsystem Status Broadcast
+    int Flags       = tsbk.args[0];                                    // bit 7 = ROAM, bit 6 = ELK
+    int SystemID    = ((tsbk.args[1] & 0x0F) << 8) | tsbk.args[2];    // System ID (12 bits)
+    int RFSSID      = tsbk.args[3];                                    // RF Subsystem ID (8 bits)
+    int SiteID      = tsbk.args[4];                                    // Site ID (8 bits)
+    int Channel     = (tsbk.args[5] << 8) | tsbk.args[6];             // Channel (ID 4 bits + number 12 bits)
+    int ServiceClass = tsbk.args[7];                                   // Service Class (8 bits)
+
+    //DSD_LOG("P25: TSBK RFSS Status Broadcast: ROAM:" << ((Flags >> 7) & 1)
+    //        << " ELK:" << ((Flags >> 6) & 1)
+    //        << " SystemID:0x" << std::hex << SystemID
+    //        << " RFSSID:" << std::dec << RFSSID
+    //        << " SiteID:" << SiteID
+    //        << " Channel:0x" << std::hex << Channel
+    //        << " ServiceClass:0x" << ServiceClass);
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.rfssFlags       = (uint8_t)Flags;
+        m_networkState.rfssSystemId    = (uint16_t)SystemID;
+        m_networkState.rfssId          = (uint8_t)RFSSID;
+        m_networkState.siteId          = (uint8_t)SiteID;
+        m_networkState.rfssChannel     = (uint16_t)Channel;
+        m_networkState.rfssServiceClass = (uint8_t)ServiceClass;
+    }
+}
+
+void DSDP25P1::processAdjacentStatusBroadcast(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 ADJ_STS_BCST - Adjacent Site Status Broadcast
+    int CFVA        = (tsbk.args[0] >> 4) & 0x07;                     // CFVA flags (3 bits: Conventional/Failure/Valid/Active)
+    int SystemID    = ((tsbk.args[1] & 0x0F) << 8) | tsbk.args[2];    // Adjacent System ID (12 bits)
+    int RFSSID      = tsbk.args[3];                                    // Adjacent RF Subsystem ID (8 bits)
+    int SiteID      = tsbk.args[4];                                    // Adjacent Site ID (8 bits)
+    int Channel     = (tsbk.args[5] << 8) | tsbk.args[6];             // Channel (ID 4 bits + number 12 bits)
+    int ServiceClass = tsbk.args[7];                                   // Service Class (8 bits)
+
+    //DSD_LOG("P25: TSBK Adjacent Status Broadcast: CFVA:0x" << std::hex << CFVA
+    //        << " SystemID:0x" << SystemID
+    //        << " RFSSID:" << std::dec << RFSSID
+    //        << " SiteID:" << SiteID
+    //        << " Channel:0x" << std::hex << Channel
+    //        << " ServiceClass:0x" << ServiceClass);
+}
+
+void DSDP25P1::processGroupVoiceChannelGrant(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s5.1 GRP_V_CH_GRANT - Group Voice Channel Grant
+    int ServiceOpts = tsbk.args[0];                                                        // Service options (Emergency b7, Encrypted b6, Priority b2:0)
+    int Channel     = (tsbk.args[1] << 8) | tsbk.args[2];                                 // Channel (Identifier 4 bits + Channel Number 12 bits)
+    int GroupAddr   = (tsbk.args[3] << 8) | tsbk.args[4];                                 // Destination Group Address (TGID)
+    int SourceAddr  = (tsbk.args[5] << 16) | (tsbk.args[6] << 8) | tsbk.args[7];         // Source Address
+
+    // Record active channel in network state
+    auto nowMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        auto& ac = m_networkState.activeChannels;
+        auto it = std::find_if(ac.begin(), ac.end(),
+            [Channel, GroupAddr](const P25NetworkState::ActiveChannel& e) {
+                return e.channel == (uint16_t)Channel && e.tgid == (uint16_t)GroupAddr;
+            });
+        if (it != ac.end()) {
+            it->srcAddr    = (uint32_t)SourceAddr;
+            it->encrypted  = (ServiceOpts >> 6) & 1;
+            it->lastSeenMs = nowMs;
+        } else {
+            P25NetworkState::ActiveChannel entry{};
+            entry.channel   = (uint16_t)Channel;
+            entry.tgid      = (uint16_t)GroupAddr;
+            entry.srcAddr   = (uint32_t)SourceAddr;
+            entry.encrypted = (ServiceOpts >> 6) & 1;
+            entry.lastSeenMs = nowMs;
+            ac.push_back(entry);
+        }
+        // Expire entries older than 10 s
+        ac.erase(std::remove_if(ac.begin(), ac.end(),
+            [nowMs](const P25NetworkState::ActiveChannel& e) {
+                return (nowMs - e.lastSeenMs) > 10000;
+            }), ac.end());
+
+        // Update discovered talk groups (never expires)
+        auto& dtg = m_networkState.discoveredTalkGroups;
+        auto dtgIt = std::find_if(dtg.begin(), dtg.end(),
+            [GroupAddr](const P25NetworkState::DiscoveredTalkGroup& e) {
+                return e.tgid == (uint16_t)GroupAddr;
+            });
+        if (dtgIt != dtg.end()) {
+            dtgIt->lastSeenMs = nowMs;
+            dtgIt->encrypted  = (ServiceOpts >> 6) & 1;
+            ++dtgIt->callCount;
+        } else {
+            P25NetworkState::DiscoveredTalkGroup tg{};
+            tg.tgid        = (uint16_t)GroupAddr;
+            tg.firstSeenMs = nowMs;
+            tg.lastSeenMs  = nowMs;
+            tg.callCount   = 1;
+            tg.encrypted   = (ServiceOpts >> 6) & 1;
+            dtg.push_back(tg);
+        }
+    }
+
+    DSD_LOG("P25: TSBK Group Voice Channel Grant: ServiceOpts:0x" << std::hex << ServiceOpts
+            << " Ch:0x" << Channel
+            << " TGID:" << std::dec << GroupAddr
+            << " SrcAddr:" << SourceAddr);
+}
+
+void DSDP25P1::processGroupVoiceChannelGrantUpdate(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s5.1 GRP_V_CH_GRANT_UPDT - Group Voice Channel Grant Update
+    int Channel1   = (tsbk.args[0] << 8) | tsbk.args[1];   // Channel 1 (Transmit)
+    int GroupAddr1 = (tsbk.args[2] << 8) | tsbk.args[3];   // Group Address 1
+    int Channel2   = (tsbk.args[4] << 8) | tsbk.args[5];   // Channel 2 (Receive)
+    int GroupAddr2 = (tsbk.args[6] << 8) | tsbk.args[7];   // Group Address 2
+
+    auto nowMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        auto& ac  = m_networkState.activeChannels;
+        auto& dtg = m_networkState.discoveredTalkGroups;
+
+        // Update active channels for both grants (retain encrypted flag if entry already exists)
+        for (int i = 0; i < 2; ++i) {
+            int ch = (i == 0) ? Channel1 : Channel2;
+            int ga = (i == 0) ? GroupAddr1 : GroupAddr2;
+            if (ga == 0) continue;
+
+            auto it = std::find_if(ac.begin(), ac.end(),
+                [ch, ga](const P25NetworkState::ActiveChannel& e) {
+                    return e.channel == (uint16_t)ch && e.tgid == (uint16_t)ga;
+                });
+            if (it != ac.end()) {
+                it->lastSeenMs = nowMs;
+            } else {
+                P25NetworkState::ActiveChannel entry{};
+                entry.channel    = (uint16_t)ch;
+                entry.tgid       = (uint16_t)ga;
+                entry.lastSeenMs = nowMs;
+                // ServiceOpts not present in GRANT_UPDT — encrypted status unknown; leave false.
+                ac.push_back(entry);
+            }
+        }
+        // Expire entries older than 10 s
+        ac.erase(std::remove_if(ac.begin(), ac.end(),
+            [nowMs](const P25NetworkState::ActiveChannel& e) {
+                return (nowMs - e.lastSeenMs) > 10000;
+            }), ac.end());
+
+        for (int ga : { GroupAddr1, GroupAddr2 }) {
+            if (ga == 0) continue;
+            auto it = std::find_if(dtg.begin(), dtg.end(),
+                [ga](const P25NetworkState::DiscoveredTalkGroup& e) { return e.tgid == (uint16_t)ga; });
+            if (it != dtg.end()) {
+                it->lastSeenMs = nowMs;
+            } else {
+                P25NetworkState::DiscoveredTalkGroup tg{};
+                tg.tgid        = (uint16_t)ga;
+                tg.firstSeenMs = nowMs;
+                tg.lastSeenMs  = nowMs;
+                tg.callCount   = 0;
+                dtg.push_back(tg);
+            }
+        }
+    }
+
+    DSD_LOG("P25: TSBK Group Voice Channel Grant Update:"
+            << " Ch1:0x" << std::hex << Channel1 << " TGID1:" << std::dec << GroupAddr1
+            << " Ch2:0x" << std::hex << Channel2 << " TGID2:" << std::dec << GroupAddr2);
+}
+
+void DSDP25P1::processTimeDateAnnouncement(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 TIME_DATE_ANNC - Time and Date Announcement
+    // Field bit layout (after args[0] = bits[79:72]):
+    //   LGT[3:0]  = bits[79:76] → (args[0]>>4) & 0x0F  — Local GMT Offset; bit3=sign(1=E), bits2:0=hours
+    //   Month[3:0]= bits[75:72] → args[0] & 0x0F
+    //   DD[4:0]   = bits[71:67] → (args[1]>>3) & 0x1F
+    //   YY[6:0]   = bits[66:60] → ((args[1]&0x07)<<4)|(args[2]>>4)  — 2-digit year, 2000-based
+    //   HH[4:0]   = bits[59:55] → ((args[2]&0x0F)<<1)|(args[3]>>7)
+    //   MN[5:0]   = bits[54:49] → (args[3]>>1) & 0x3F
+    int LGT   = (tsbk.args[0] >> 4) & 0x0F;
+    int Month = tsbk.args[0] & 0x0F;
+    int Day   = (tsbk.args[1] >> 3) & 0x1F;
+    int Year  = ((tsbk.args[1] & 0x07) << 4) | (tsbk.args[2] >> 4);
+    int Hour  = ((tsbk.args[2] & 0x0F) << 1) | (tsbk.args[3] >> 7);
+    int Min   = (tsbk.args[3] >> 1) & 0x3F;
+
+    int lgtSign  = (LGT >> 3) & 0x1;   // 1 = East (positive), 0 = West (negative)
+    int lgtHours = LGT & 0x07;
+
+    //DSD_LOG("P25: TSBK Time/Date: "
+    //        << (2000 + Year) << "-"
+    //        << Month << "-" << Day << " "
+    //        << Hour << ":" << Min
+    //        << " UTC" << (lgtSign ? "+" : "-") << lgtHours);
+}
+
+void DSDP25P1::processIdenUpdateTDMA(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 IDEN_UP_TDMA - Channel Identifier Update for TDMA channels
+    static const int slotsPerCarrier[] = {1,1,1,2,4,2,2,2,2,2,2,2,2,2,2,2};
+
+    int Identifier  = (tsbk.args[0] >> 4) & 0x0F;                                          // Channel identifier (4 bits)
+    int ChannelType = tsbk.args[0] & 0x0F;                                                  // TDMA channel type (4 bits)
+    int Slots       = slotsPerCarrier[ChannelType];
+    int TXOffset0   = (tsbk.args[1] << 6) | ((tsbk.args[2] >> 2) & 0x3F);                  // TX offset raw (14 bits)
+    int Spacing     = ((tsbk.args[2] & 0x03) << 8) | tsbk.args[3];                         // Channel spacing (10 bits, units 125 Hz)
+    long BaseFreq   = ((long)tsbk.args[4] << 24) | ((long)tsbk.args[5] << 16)
+                    | ((long)tsbk.args[6] << 8)  |  tsbk.args[7];                           // Base frequency (32 bits, units 5 Hz)
+
+    // Signed TX offset: bit 13 = sign (0 = negative, 1 = positive); magnitude in spacing×125 Hz units
+    int  toff_sign  = (TXOffset0 >> 13) & 0x1;
+    long TXOffsetHz = (long)(TXOffset0 & 0x1FFF) * Spacing * 125;
+    if (toff_sign == 0)
+        TXOffsetHz = -TXOffsetHz;
+
+    //DSD_LOG("P25: TSBK IDEN Update TDMA: ID:" << Identifier
+    //        << " Type:" << ChannelType << "(" << Slots << " slots)"
+    //        << " BaseFreq:" << (BaseFreq * 5) << "Hz"
+    //        << " Spacing:" << (Spacing * 125) << "Hz"
+    //        << " TXOffset:" << TXOffsetHz << "Hz");
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        auto& ci = m_networkState.channelIdents[Identifier & 0x0F];
+        ci.valid          = true;
+        ci.baseFreqHz     = BaseFreq * 5;
+        ci.spacingHz      = (int64_t)Spacing * 125;
+        ci.txOffsetHz     = TXOffsetHz;
+        ci.bwHz           = (int32_t)((int64_t)Spacing * 125);
+        ci.slotsPerCarrier = Slots;
+        ci.isTDMA         = (Slots > 1);
+    }
+}
+
+void DSDP25P1::processIdenUpdate(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 IDEN_UP - Channel Identifier Update (wideband)
+    int Identifier  = (tsbk.args[0] >> 4) & 0x0F;                                          // Channel identifier (4 bits)
+    int BW          = ((tsbk.args[0] & 0x0F) << 5) | (tsbk.args[1] >> 3);                  // Bandwidth (9 bits, units 125 Hz)
+    int TXOffset0   = ((tsbk.args[1] & 0x07) << 6) | (tsbk.args[2] >> 2);                  // TX offset raw (9 bits)
+    int Spacing     = ((tsbk.args[2] & 0x03) << 8) | tsbk.args[3];                         // Channel spacing (10 bits, units 125 Hz)
+    long BaseFreq   = ((long)tsbk.args[4] << 24) | ((long)tsbk.args[5] << 16)
+                    | ((long)tsbk.args[6] << 8)  |  tsbk.args[7];                           // Base frequency (32 bits, units 5 Hz)
+
+    // Signed TX offset: bit 8 = sign (0 = negative, 1 = positive); magnitude in 250 kHz units
+    int  toff_sign  = (TXOffset0 >> 8) & 0x1;
+    long TXOffsetHz = (long)(TXOffset0 & 0xFF) * 250000;
+    if (toff_sign == 0)
+        TXOffsetHz = -TXOffsetHz;
+
+    //DSD_LOG("P25: TSBK IDEN Update: ID:" << Identifier
+    //        << " BW:" << (BW * 125) << "Hz"
+    //        << " BaseFreq:" << (BaseFreq * 5) << "Hz"
+    //        << " Spacing:" << (Spacing * 125) << "Hz"
+    //        << " TXOffset:" << TXOffsetHz << "Hz");
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        auto& ci = m_networkState.channelIdents[Identifier & 0x0F];
+        ci.valid          = true;
+        ci.baseFreqHz     = BaseFreq * 5;
+        ci.spacingHz      = (int64_t)Spacing * 125;
+        ci.txOffsetHz     = TXOffsetHz;
+        ci.bwHz           = (int32_t)((int64_t)BW * 125);
+        ci.slotsPerCarrier = 1;
+        ci.isTDMA         = false;
+    }
+}
+
+void DSDP25P1::processSecondaryControlChannelBroadcast(TSBK& tsbk)
+{
+    // TIA-102.AABC-B s6.2 SCCB - Secondary Control Channel Broadcast
+    int RFSSID   = tsbk.args[0];                             // RF Subsystem ID
+    int SiteID   = tsbk.args[1];                             // Site ID
+    int Channel1 = (tsbk.args[2] << 8) | tsbk.args[3];      // Transmit channel
+    // args[4] reserved
+    int Channel2 = (tsbk.args[5] << 8) | tsbk.args[6];      // Receive channel
+
+    //DSD_LOG("P25: TSBK Secondary Control Channel Broadcast: RFSSID:" << RFSSID
+    //        << " SiteID:" << SiteID
+    //        << " Ch1(Tx):0x" << std::hex << Channel1
+    //        << " Ch2(Rx):0x" << Channel2);
+}
+
+void DSDP25P1::processTSBKOpcodeMoto(TSBK& tsbk)
+{
+    switch (tsbk.opcode)
+    {
+    case 0x00: // MOT_GRG_ADD_CMD - Group Regroup Add (supergroup patch)
+    {
+        int SuperGroup = (tsbk.args[0] << 8) | tsbk.args[1];   // Patch supergroup ID
+        int GroupAddr1 = (tsbk.args[2] << 8) | tsbk.args[3];   // Patch group 1
+        int GroupAddr2 = (tsbk.args[4] << 8) | tsbk.args[5];   // Patch group 2
+        int GroupAddr3 = (tsbk.args[6] << 8) | tsbk.args[7];   // Patch group 3
+
+        //DSD_LOG("P25: Moto Group Regroup Add: SuperGroup:" << SuperGroup
+        //        << " GA1:" << GroupAddr1
+        //        << " GA2:" << GroupAddr2
+        //        << " GA3:" << GroupAddr3);
+        break;
+    }
+
+    case 0x0B: // MOT_CC_BSI - Control Channel Base Station Identifier (callsign)
+    {
+        // 7 characters packed as 6-bit values (ASCII offset +43); 0 = pad/skip
+        int chars[7];
+        chars[0] = (tsbk.args[0] >> 2) & 0x3F;
+        chars[1] = ((tsbk.args[0] & 0x03) << 4) | (tsbk.args[1] >> 4);
+        chars[2] = ((tsbk.args[1] & 0x0F) << 2) | (tsbk.args[2] >> 6);
+        chars[3] =   tsbk.args[2] & 0x3F;
+        chars[4] = (tsbk.args[3] >> 2) & 0x3F;
+        chars[5] = ((tsbk.args[3] & 0x03) << 4) | (tsbk.args[4] >> 4);
+        chars[6] = ((tsbk.args[4] & 0x0F) << 2) | (tsbk.args[5] >> 6);
+        int Channel = (tsbk.args[6] << 8) | tsbk.args[7];
+
+        std::string callsign;
+        for (int i = 0; i < 7; i++)
+            if (chars[i] != 0)
+                callsign += static_cast<char>(chars[i] + 43);
+
+        //DSD_LOG("P25: Moto Base Station ID: Callsign:\"" << callsign
+        //        << "\" Ch:0x" << std::hex << Channel);
+        break;
+    }
+
+    default: // Unknown Motorola MFID 0x90 opcode — log raw bytes
+    {
+        /*
+        std::ostringstream _oss;
+        _oss << "P25: Moto Unknown opcode:0x" << std::hex << (int)tsbk.opcode << " args:";
+        for (int i = 0; i < 8; i++)
+            _oss << " " << std::hex << (int)tsbk.args[i];
+        dsd_trace_post(_oss.str().c_str());
+        */
+        break;
+    }
+    }
+}
+
 
 void DSDP25P1::processPDU()
 {
     // Packet Data Unit - data transmission
-    TRACE("P25: PDU processing not implemented\n");
+    //TRACE("P25: PDU processing not implemented\n");
     m_dsdDecoder->resetFrameSync();
 }
 
@@ -591,23 +1053,15 @@ int DSDP25P1::find_min(uint8_t list[], int len)
 {
     int min = list[0];
     int index = 0;
-    int unique = 1;
     int i;
 
     for (i = 1; i < len; i++) {
         if (list[i] < min) {
             min = list[i];
             index = i;
-            unique = 1;
-        }
-        else if (list[i] == min) {
-            unique = 0;
         }
     }
-    /* return -1 if a minimum can't be found */
-    if (!unique)
-        return -1;
-
+    // On a tie, return the first minimum found (best-effort; CRC validates the result).
     return index;
 }
 
@@ -677,21 +1131,8 @@ bool DSDP25P1::decodeTrellis_1_2()
         }
         /* find the dibit that matches the most codeword bits (minimum Hamming distance) */
         state = find_min(hd, 4);
-        /* error if minimum can't be found */
-        if (state == -1)
-        {
-            //TRACE("P25: TSBK decode error at dibit %d, codeword: %02X\n", i / 2, codeword);
-            m_dsdDecoder->resetFrameSync();
-            return false;	// decode error, return failure
-        }
-        /* It also might be nice to report a condition where the minimum is
-         * non-zero, i.e. an error has been corrected.  It probably shouldn't
-         * be a permanent failure, though.
-         *
-         * DISSECTOR_ASSERT(hd[state] == 0);
-         */
 
-         /* append dibit onto output buffer */
+        /* append dibit onto output buffer */
         if (i < 96)
         {
             int bitPosition = (6 - (((i / 2) % 4) * 2));

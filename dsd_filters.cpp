@@ -136,6 +136,18 @@ const float DSDFilters::dpmrcoeffs[] =
         0.0275919612f, 0.0232592816f, 0.0179185547f, 0.0119748846f,
         0.0058388841f, -0.0000983004f};
 
+// P25 Phase 1 I&D (Integrate and Dump) filter: 10-tap boxcar, one symbol period at 4800 baud / 48 kHz.
+// Per TIA-102.CAAA-B: discriminator output -> I&D filter -> clock recovery.
+// I&D is the correct matched filter for C4FM FM discriminator output.
+// Response: H(f) = sin(10*pi*f/48000) / (10*sin(pi*f/48000)), flat group delay = 4.5 samples,
+// -3 dB at ~2100 Hz, first null at 4800 Hz (= symbol rate).
+const float DSDFilters::p25gain = 10.0f;
+const float DSDFilters::p25coeffs[] =
+{
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f
+};
+
 DSDFilters::DSDFilters()
 {
     for (int i=0; i < NZEROS+1; i++) {
@@ -144,6 +156,10 @@ DSDFilters::DSDFilters()
 
     for (int i=0; i < NXZEROS+1; i++) {
         nxv[i] = 0.0f;
+    }
+
+    for (int i=0; i < P25ZEROS+1; i++) {
+        p25v[i] = 0.0f;
     }
 }
 
@@ -159,6 +175,11 @@ short DSDFilters::dmr_filter(short sample) // all 4800 baud filters for now
 short DSDFilters::nxdn_filter(short sample) // all 2400 baud filters for now
 {
     return dsd_input_filter(sample, 4);
+}
+
+short DSDFilters::p25p1_filter(short sample) // P25 Phase 1: RRC alpha=0.2, 4800 baud
+{
+    return dsd_input_filter(sample, 5);
 }
 
 short DSDFilters::dsd_input_filter(short sample, int mode)
@@ -195,6 +216,12 @@ short DSDFilters::dsd_input_filter(short sample, int mode)
         v = nxv;
         coeffs = dpmrcoeffs;
         zeros = NXZEROS;
+        break;
+    case 5:
+        gain = p25gain;
+        v = p25v;
+        coeffs = p25coeffs;
+        zeros = P25ZEROS;
         break;
     default:
         return sample;

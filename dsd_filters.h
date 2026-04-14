@@ -19,6 +19,11 @@
 
 #define NZEROS 60
 #define NXZEROS 134
+// I&D (Integrate and Dump) filter for P25 C4FM: 10-tap boxcar over one symbol period (4800 baud / 48 kHz).
+// TIA-102.CAAA-B specifies an I&D receiver for C4FM discriminator output, NOT an RRC matched filter.
+// FM demodulation does not preserve RRC pulse shape; an RRC filter creates ISI on FM discriminator output.
+// The I&D averages 10 samples (one symbol period), giving zero ISI and flat group delay to ~2400 Hz.
+#define P25ZEROS 9
 
 #include "iirfilter.h"
 #include "export.h"
@@ -40,14 +45,18 @@ public:
     static const float dmrcoeffs[];
     static const float dpmrgain;
     static const float dpmrcoeffs[];
+    static const float p25gain;
+    static const float p25coeffs[];
 
     short dsd_input_filter(short sample, int mode);
     short dmr_filter(short sample);
     short nxdn_filter(short sample);
+    short p25p1_filter(short sample);
 
 private:
     float xv[NZEROS+1];
     float nxv[NXZEROS+1];
+    float p25v[P25ZEROS+1];
 };
 
 /**

@@ -29,6 +29,9 @@
 #ifdef interface
 #undef interface  // windows.h defines 'interface' as a keyword; restore it as a normal identifier
 #endif
+#ifdef small
+#undef small      // rpcndr.h (via windows.h) defines 'small' as 'char'; prevents use as an identifier
+#endif
 #include <sstream>
 #include <iostream>
 
@@ -46,6 +49,13 @@ void dsd_trace_post(const char* msg);
 #define TRACE(fmt, ...) do {} while(0)
 #endif
 #endif
+
+// Thread-safe log: builds the entire message atomically before posting.
+// Use instead of bare std::cerr chains, which are not thread-safe across
+// multiple DSP threads sharing the same redirected streambuf.
+// Usage:  DSD_LOG("value=" << x << " hex=0x" << std::hex << y);
+#define DSD_LOG(stream_expr) \
+    do { std::ostringstream _dsd_oss; _dsd_oss << stream_expr; dsd_trace_post(_dsd_oss.str().c_str()); } while(0)
 
 class dbg_stream_for_cout
     : public std::stringbuf

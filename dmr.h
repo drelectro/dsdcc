@@ -141,6 +141,11 @@ private:
 
     void BasicPrivacyXOR(unsigned char *dibit, int pos);
 
+    bool decodeBPTC196_96(unsigned char *infoBits);         //!< BPTC(196,96) decode of m_dataDibits → 96 info bits
+    void decodeCSBK(const unsigned char *infoBits);         //!< Parse CSBK PDU (ETSI TS 102 361-1 §9.1.7)
+    void decodeMBCHeader(const unsigned char *infoBits);    //!< Parse MBC Header PDU
+    void decodeMBCContinuation(const unsigned char *infoBits); //!< Log MBC Continuation block
+
     DSDDecoder *m_dsdDecoder;
     int  m_symbolIndex;                   //!< current symbol index in non HD sequence
     int  m_cachSymbolIndex;               //!< count of symbols since last positive CACH identification
@@ -165,6 +170,7 @@ private:
     bool          m_voice2EmbSig_OK;
     DMRAddresses  m_slot2Addresses;
     unsigned char m_syncDibits[24];
+    unsigned char m_dataDibits[98];          //!< Data payload buffer: first half [0..48] + second half [49..97] = 196 bits for BPTC decode
     unsigned int m_voice1FrameCount; //!< current frame count in voice superframe: [0..5] else no superframe on going
     unsigned int m_voice2FrameCount; //!< current frame count in voice superframe: [0..5] else no superframe on going
     unsigned char m_mbeDVFrame[9];
@@ -173,6 +179,7 @@ private:
     Golay_20_8 m_golay_20_8;
     QR_16_7_6 m_qr_16_7_6;
     Hamming_16_11_4 m_hamming_16_11_4;
+    Hamming_15_11 m_hamming_15_11;
 
     const int *w, *x, *y, *z;
 
@@ -185,6 +192,8 @@ private:
     static const int rY[36];
     static const int rZ[36];
     static const unsigned short BasicPrivacyKeys[DMR_BP_KEYS_COUNT];
+
+    int m_verbosity = 1;
 };
 
 } // namespace DSDcc

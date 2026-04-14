@@ -17,9 +17,6 @@
 #ifndef DSDCC_DSD_DECODER_H_
 #define DSDCC_DSD_DECODER_H_
 
-#include <sdkddkver.h>
-#include <afx.h>
-
 #include "dsd_opts.h"
 #include "dsd_state.h"
 #include "dsd_logger.h"
@@ -280,7 +277,7 @@ public:
         m_mbeDecoder2.useHP(useHP);
     }
 
-    void outputText(CString text);
+    void outputText(const char* text);
 
 private:
     typedef enum

@@ -677,6 +677,7 @@ int DSDDecoder::getFrameSync()
             {
                 m_state.carrier = 1;
                 m_dsdSymbol.setFSK(4);
+                m_dsdSymbol.setFilterMode(DSDSymbol::FilterP25);
 
                 sprintf(m_state.ftype, "+P25 Phase 1 ");
 
@@ -694,6 +695,7 @@ int DSDDecoder::getFrameSync()
             {
                 m_state.carrier = 1;
                 m_dsdSymbol.setFSK(4, true);
+                m_dsdSymbol.setFilterMode(DSDSymbol::FilterP25);
 
                 sprintf(m_state.ftype, "-P25 Phase 1 ");
 
