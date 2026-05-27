@@ -21,8 +21,12 @@
 #include "export.h"
 
 extern "C" {
+#ifdef USE_MBELIB_NEO
+#include <mbelib-neo/mbelib.h>
+#else
 //#include <mbelib.h>
 #include "..\mbelib\mbelib.h"
+#endif
 }
 
 namespace DSDcc
