@@ -746,6 +746,8 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
             y = rY;
             z = rZ;
 
+            memset((void*)m_dsdDecoder->ambe_fr, 0, sizeof(m_dsdDecoder->ambe_fr));
+
             if (m_slot == DSDDMRSlot1) {
                 memset((void *) m_dsdDecoder->m_mbeDVFrame1, 0, IN_BYTES(DMR_VOCODER_FRAME_LEN)); // initialize DVSI frame 1
             } else {
@@ -754,6 +756,9 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
         }
 
         BasicPrivacyXOR(&dibit, mbeIndex);
+		if (dibit > 3) {
+			dibit = 0; // invalid dibit, should not happen, but to be safe
+		}
 
         m_dsdDecoder->ambe_fr[*w][*x] = (1 & (dibit >> 1)); // bit 1
         m_dsdDecoder->ambe_fr[*y][*z] = (1 & dibit);        // bit 0

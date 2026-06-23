@@ -102,7 +102,7 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
 
         mbe_processImbe7200x4400Framef(m_audio_out_temp_buf, result, imbe_fr, imbe_d, m_mbelibParms->m_cur_mp,
-            m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+            m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate7100x4400)
     {
@@ -111,7 +111,7 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
         //        m_mbelibParms->m_cur_mp, m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced,
         //        m_dsdDecoder->m_opts.uvquality);
 		mbe_processImbe7100x4400Framef(m_audio_out_temp_buf, result, imbe7100_fr, imbe_d, m_mbelibParms->m_cur_mp,
-			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate3600x2400)
     {
@@ -119,7 +119,7 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
         //        &m_errs2, m_err_str, ambe_fr, ambe_d,m_mbelibParms-> m_cur_mp,
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
 		mbe_processAmbe3600x2400Framef(m_audio_out_temp_buf, result, ambe_fr, ambe_d, m_mbelibParms->m_cur_mp,
-			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else
     {
@@ -127,7 +127,7 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
         //        &m_errs2, m_err_str, ambe_fr, ambe_d, m_mbelibParms->m_cur_mp,
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
 		mbe_processAmbe3600x2450Framef(m_audio_out_temp_buf, result, ambe_fr, ambe_d, m_mbelibParms->m_cur_mp,
-			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
 
     if (m_dsdDecoder->m_opts.errorbars == 1)
@@ -154,7 +154,7 @@ void DSDMBEDecoder::processData(char imbe_data[88], char ambe_data[49])
         //        &m_errs2, m_err_str, imbe_data, m_mbelibParms->m_cur_mp,
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
 		mbe_processImbe4400Dataf(m_audio_out_temp_buf, result, imbe_data, 
-            m_mbelibParms->m_cur_mp, m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+            m_mbelibParms->m_cur_mp, m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate2400)
     {
@@ -162,7 +162,7 @@ void DSDMBEDecoder::processData(char imbe_data[88], char ambe_data[49])
         //        &m_errs2, m_err_str, ambe_data, m_mbelibParms->m_cur_mp,
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
         mbe_processAmbe2400Dataf(m_audio_out_temp_buf, result, ambe_data, m_mbelibParms->m_cur_mp,
-            m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+            m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate2450)
     {
@@ -170,7 +170,7 @@ void DSDMBEDecoder::processData(char imbe_data[88], char ambe_data[49])
         //        &m_errs2, m_err_str, ambe_data, m_mbelibParms->m_cur_mp,
         //        m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, m_dsdDecoder->m_opts.uvquality);
 		mbe_processAmbe2450Dataf(m_audio_out_temp_buf, result, ambe_data, m_mbelibParms->m_cur_mp,
-			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 0);
+			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
     else
     {
