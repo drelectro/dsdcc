@@ -31,7 +31,11 @@ namespace DSDcc
 DSDMBEDecoder::DSDMBEDecoder(DSDDecoder *dsdDecoder) :
         m_dsdDecoder(dsdDecoder),
         m_upsamplerLastValue(0.0f),
-        m_mbelibParms(0)
+        m_mbelibParms(0),
+        m_ippUpsampSpec(nullptr),
+        m_ippUpsampDly(nullptr),
+        m_ippUpsampBuf(nullptr),
+        m_ippUpsampFactor(0)
 {
 #ifdef DSD_USE_MBELIB
     m_mbelibParms = new DSDmbelibParms();
@@ -61,13 +65,61 @@ DSDMBEDecoder::DSDMBEDecoder(DSDDecoder *dsdDecoder) :
 
 	memset(ambe_d, 0, 49);
 	memset(imbe_d, 0, 88);
+
+    initIppUpsampler();
 }
 
 DSDMBEDecoder::~DSDMBEDecoder()
 {
+    freeIppUpsampler();
 #ifdef DSD_USE_MBELIB
     delete m_mbelibParms;
 #endif
+}
+
+void DSDMBEDecoder::initIppUpsampler()
+{
+    freeIppUpsampler();
+
+    constexpr int NTAPS = 96;
+    constexpr int UP = 6;
+    constexpr double CUTOFF = 3800.0 / 48000.0;
+
+    int genBufSize = 0;
+    ippsFIRGenGetBufferSize(NTAPS, &genBufSize);
+    Ipp8u* genBuf = ippsMalloc_8u(genBufSize);
+    Ipp64f* taps64 = ippsMalloc_64f(NTAPS);
+
+    ippsFIRGenLowpass_64f(CUTOFF, taps64, NTAPS, ippWinBlackman, ippFalse, genBuf);
+    ippsFree(genBuf);
+
+    Ipp32f taps32[NTAPS];
+    for (int i = 0; i < NTAPS; ++i) {
+        taps32[i] = static_cast<Ipp32f>(taps64[i]) * UP;
+    }
+    ippsFree(taps64);
+
+    int specSize = 0;
+    int bufSize = 0;
+    ippsFIRMRGetSize(NTAPS, UP, 1, ipp32f, &specSize, &bufSize);
+    m_ippUpsampSpec = reinterpret_cast<IppsFIRSpec_32f*>(ippsMalloc_8u(specSize));
+    m_ippUpsampBuf = ippsMalloc_8u(bufSize);
+    ippsFIRMRInit_32f(taps32, NTAPS, UP, 0, 1, 0, m_ippUpsampSpec);
+
+    m_ippUpsampDly = ippsMalloc_32f(NTAPS - 1);
+    ippsZero_32f(m_ippUpsampDly, NTAPS - 1);
+    m_ippUpsampFactor = UP;
+}
+
+void DSDMBEDecoder::freeIppUpsampler()
+{
+    ippsFree(m_ippUpsampSpec);
+    ippsFree(m_ippUpsampDly);
+    ippsFree(m_ippUpsampBuf);
+    m_ippUpsampSpec = nullptr;
+    m_ippUpsampDly = nullptr;
+    m_ippUpsampBuf = nullptr;
+    m_ippUpsampFactor = 0;
 }
 
 void DSDMBEDecoder::initMbeParms()
@@ -294,13 +346,30 @@ void DSDMBEDecoder::processAudio()
 
         m_audio_out_float_buf_p = m_audio_out_float_buf;
 
-        for (n = 0; n < 160; n++)
+        if (upsampling == m_ippUpsampFactor && m_ippUpsampSpec && m_ippUpsampDly && m_ippUpsampBuf)
         {
-            upsample(upsampling, *m_audio_out_temp_buf_p);
-            m_audio_out_temp_buf_p++;
-            m_audio_out_float_buf_p += upsampling;
-            m_audio_out_idx += upsampling;
-            m_audio_out_idx2 += upsampling;
+            for (n = 0; n < 160; n++)
+            {
+                m_audio_out_temp_buf[n] =
+                    (m_upsamplingFilter.usesHP() ? m_upsamplingFilter.runHP(m_audio_out_temp_buf[n]) : m_audio_out_temp_buf[n]) * m_volume;
+            }
+
+            ippsFIRMR_32f(m_audio_out_temp_buf, m_audio_out_float_buf, 160,
+                m_ippUpsampSpec, m_ippUpsampDly, m_ippUpsampDly, m_ippUpsampBuf);
+
+            m_audio_out_idx += 160 * upsampling;
+            m_audio_out_idx2 += 160 * upsampling;
+        }
+        else
+        {
+            for (n = 0; n < 160; n++)
+            {
+                upsample(upsampling, *m_audio_out_temp_buf_p);
+                m_audio_out_temp_buf_p++;
+                m_audio_out_float_buf_p += upsampling;
+                m_audio_out_idx += upsampling;
+                m_audio_out_idx2 += upsampling;
+            }
         }
 
         m_audio_out_float_buf_p = m_audio_out_float_buf;

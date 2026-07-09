@@ -19,6 +19,7 @@
 
 #include "dsd_filters.h"
 #include "export.h"
+#include "ipp.h"
 
 namespace DSDcc
 {
@@ -60,6 +61,8 @@ public:
 private:
     void processAudio();
     void upsample(int upsampling, float invalue);
+    void initIppUpsampler();
+    void freeIppUpsampler();
 
     DSDDecoder *m_dsdDecoder;
     char imbe_d[88];
@@ -96,6 +99,11 @@ private:
     unsigned char m_channels;  //!< when in stereo output to none (0) or only left (1), right (2) or both (3) channels
 
     DSDMBEAudioInterpolatorFilter m_upsamplingFilter;
+
+    IppsFIRSpec_32f* m_ippUpsampSpec;
+    Ipp32f*          m_ippUpsampDly;
+    Ipp8u*           m_ippUpsampBuf;
+    int              m_ippUpsampFactor;
 };
 
 }

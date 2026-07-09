@@ -24,6 +24,9 @@
 
 #include <streambuf>
 #include <ostream>
+#ifndef NOMINMAX
+#define NOMINMAX   // keep windows.h from defining min/max function-like macros
+#endif
 #include <winsock2.h>  // Must precede windows.h to avoid WinSock.h/WinSock2.h conflict
 #include <windows.h>
 #ifdef interface
@@ -31,6 +34,17 @@
 #endif
 #ifdef small
 #undef small      // rpcndr.h (via windows.h) defines 'small' as 'char'; prevents use as an identifier
+#endif
+// If another header included windows.h first (without NOMINMAX), the macros
+// already exist — scrub them like 'interface'/'small' above. Every std::min/
+// std::max in a TU that includes this header breaks otherwise; the project
+// only survived because Qt's qendian.h happened to #undef them at a lucky
+// point in the include order (any include reshuffle broke the build).
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
 #endif
 #include <sstream>
 #include <iostream>
