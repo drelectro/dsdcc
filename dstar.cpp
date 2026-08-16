@@ -233,7 +233,7 @@ void DSDDstar::processVoice()
 //        std::cerr << "DSDDstar::processVoice: " << m_voiceFrameCount << std::endl;
 
         if (m_dsdDecoder->m_opts.errorbars == 1) {
-            m_dsdDecoder->getLogger().log("\nMBE: ");
+            //m_dsdDecoder->getLogger().log("\nMBE: ");
         }
 
         m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
