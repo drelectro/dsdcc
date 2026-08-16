@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <mutex>
+#include <vector>
 
 #include "fec.h"
 #include "export.h"
@@ -95,6 +97,83 @@ public:
         DSDDMRDataUnknown
     } DSDDMRDataTYpe;
 
+    // Snapshot of decoded DMR Tier III trunking state — safe to read from any thread
+    // via getNetworkStateCopy(). Populated from CRC-OK TSCC CSBKs/MBCs only.
+    struct DMRNetworkState
+    {
+        // TSCC identity — from C_ALOHA / C_BCAST System Identity Code
+        bool     tsccDetected = false;
+        uint64_t lastTsccActivityMs = 0; //!< steady_clock ms of last CRC-OK TSCC CSBK
+        uint16_t sysCode = 0;            //!< raw 16-bit C_SYScode
+        uint8_t  sysModel = 0;           //!< 0=Tiny 1=Small 2=Large 3=Huge
+        uint16_t netId = 0;
+        uint16_t siteId = 0;
+        uint8_t  par = 0;                //!< TSCC slot usage (categories A/B)
+        uint8_t  colorCode = 0;
+        uint8_t  vendorFid = 0;          //!< last recognised manufacturer FID (DMRA MFID)
+
+        // Logical channel → frequency mappings learned over the air
+        // (C_BCAST Chan_Freq announcements, CSBK and MBC forms)
+        struct LearnedChannel {
+            uint16_t lpcn = 0;           //!< 12-bit logical physical channel number
+            int64_t  rxFreqHz = 0;       //!< MS receive (BS transmit / downlink)
+            int64_t  txFreqHz = 0;       //!< MS transmit (0 if not announced)
+            uint64_t lastSeenMs = 0;
+        };
+        std::vector<LearnedChannel> learnedChannels;
+
+        // Adjacent / vote-target sites from C_BCAST announcements
+        struct AdjacentSite {
+            uint16_t sysCode = 0;
+            uint16_t lpcn = 0;           //!< that site's TSCC channel (0 if unknown)
+            bool     voteNow = false;    //!< true if learned from a Vote_Now advice
+            uint64_t lastSeenMs = 0;
+        };
+        std::vector<AdjacentSite> adjacentSites;
+
+        // Active calls from PV/TV/BTV/PD/TD grants; consumers skip entries older than ~10 s
+        struct ActiveCall {
+            uint16_t lpcn = 0;
+            int      slot = 0;           //!< 0 or 1, from the grant TS bit
+            uint32_t tgid = 0;           //!< 24-bit destination address
+            uint32_t srcAddr = 0;        //!< 24-bit source address
+            bool     isGroup = true;     //!< false for PV/PD (individual) grants
+            bool     isData = false;     //!< true for PD/TD (data) grants
+            bool     emergency = false;
+            uint64_t lastSeenMs = 0;
+        };
+        std::vector<ActiveCall> activeCalls;
+
+        // Talk groups observed on group voice grants; never expires
+        struct DiscoveredTalkGroup {
+            uint32_t tgid = 0;
+            uint64_t firstSeenMs = 0;
+            uint64_t lastSeenMs = 0;
+            uint32_t callCount = 0;
+        };
+        std::vector<DiscoveredTalkGroup> discoveredTalkGroups;
+
+        // Cumulative counters — not reset on sync loss
+        uint32_t csbkTotalCount = 0;
+        uint32_t csbkCrcOkCount = 0;
+        uint32_t csbkCrcFailCount = 0;
+        uint32_t mbcAssembledCount = 0;
+        uint32_t mbcCrcFailCount = 0;
+        uint32_t bptcFailCount = 0;
+    };
+
+    DMRNetworkState getNetworkStateCopy() const
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        return m_networkState;
+    }
+
+    void setVerbosity(int verbosity) { m_verbosity = verbosity; }
+
+    // DMRA Manufacturer's ID (FID) → vendor name, or nullptr for the ETSI-standard
+    // FID (0x00) and unrecognised codes. Shared by the bench and the status widget.
+    static const char *fidVendorName(unsigned char fid);
+
     explicit DSDDMR(DSDDecoder *dsdDecoder);
     ~DSDDMR();
 
@@ -147,11 +226,26 @@ private:
 
     bool decodeBPTC196_96(unsigned char *infoBits);         //!< BPTC(196,96) decode of m_dataDibits → 96 info bits
     void decodeCSBK(const unsigned char *infoBits);         //!< Parse CSBK PDU (ETSI TS 102 361-1 §9.1.7)
-    void decodeMBCHeader(const unsigned char *infoBits);    //!< Parse MBC Header PDU
-    void decodeMBCContinuation(const unsigned char *infoBits); //!< Log MBC Continuation block
+    void decodeMBCHeader(const unsigned char *infoBits);    //!< Parse MBC Header PDU, start per-slot assembly
+    void decodeMBCContinuation(const unsigned char *infoBits); //!< Append MBC Continuation block, dispatch on last block
+    void processAssembledMBC(int slotIdx);                  //!< Decode a fully assembled multi-block CSBK
     void noteCSBKSyncAcquired();
     void noteCSBKSyncLost();
     bool shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, const std::string& messageText);
+
+    // Per-opcode CSBK payload parsers (TS 102 361-4). Each appends decoded fields to msg
+    // and, when updateState is true (CRC OK), mutates m_networkState under m_stateMutex.
+    // contBits/nContBits carry MBC continuation payload bits for the MBC forms (null for CSBK form).
+    void parseCSBKPayload(unsigned char csbko, unsigned char mfid, const unsigned char *infoBits,
+                          std::ostringstream& msg, bool updateState,
+                          const unsigned char *contBits = nullptr, int nContBits = 0);
+    void parseAloha(const unsigned char *infoBits, std::ostringstream& msg, bool updateState);
+    void parseAhoyOrRand(const unsigned char *infoBits, std::ostringstream& msg);
+    void parseGrant(unsigned char csbko, const unsigned char *infoBits, std::ostringstream& msg, bool updateState);
+    void parseBcast(const unsigned char *infoBits, std::ostringstream& msg, bool updateState,
+                    const unsigned char *contBits, int nContBits);
+    void parseMove(const unsigned char *infoBits, std::ostringstream& msg);
+    void noteTsccIdentity(unsigned int sic);                //!< Update site identity in state (caller holds no lock)
 
     DSDDecoder *m_dsdDecoder;
     int  m_symbolIndex;                   //!< current symbol index in non HD sequence
@@ -211,6 +305,21 @@ private:
     std::unordered_map<std::uint32_t, CSBKLogState> m_csbkLogStates;
     std::uint32_t m_csbkSyncEpoch = 0;
     bool m_csbkSyncLocked = false;
+
+    // Multi-block CSBK assembly, one per slot (slots interleave burst by burst)
+    struct MBCAssembly
+    {
+        bool          active = false;
+        unsigned char csbko = 0;
+        unsigned char mfid = 0;
+        unsigned char blockBits[8][96];  //!< info bits per block: [0]=header, [1..]=continuations
+        int           numBlocks = 0;
+        std::uint64_t startMs = 0;
+    };
+    MBCAssembly m_mbcAssembly[2];
+
+    DMRNetworkState m_networkState;
+    mutable std::mutex m_stateMutex;
 
     int m_verbosity = 1;
 };

@@ -68,6 +68,7 @@ void DSDDecoder::setVerbosity(int verbosity)
 {
     m_opts.verbose = verbosity;
     m_dsdLogger.setVerbosity(verbosity);
+    m_dsdDMR.setVerbosity(verbosity);
 }
 
 void DSDDecoder::showErrorBars()

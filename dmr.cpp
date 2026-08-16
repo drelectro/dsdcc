@@ -15,9 +15,11 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include <iostream>
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <iomanip>
+#include <sstream>
 #include <string.h>
 #include "dmr.h"
 #include "dsd_decoder.h"
@@ -672,6 +674,12 @@ void DSDDMR::processDataDibit(unsigned char dibit)
                         break;
                 }
             }
+            else if (m_dataType == DSDDMRDataCSBK || m_dataType == DSDDMRDataMBCHeader
+                  || m_dataType == DSDDMRDataMBCContinuation)
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_networkState.bptcFailCount++;
+            }
         }
         return;
     }
@@ -1223,7 +1231,7 @@ const char *DSDDMR::getSlot1Text() const
 
 unsigned char DSDDMR::getColorCode() const
 {
-    return m_dsdDecoder->m_state.ccnum;
+    return m_colorCode;
 }
 
 // ========================================================================================
@@ -1456,6 +1464,75 @@ static unsigned int bitsToUint(const unsigned char *bits, int nbBits)
     return v;
 }
 
+static std::uint64_t nowMsSteady()
+{
+    return (std::uint64_t) std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Absolute frequency parameter: 10-bit MHz + 13-bit multiple of 125 Hz (TS 102 361-4)
+static int64_t decodeFreq23(unsigned int v23)
+{
+    unsigned int mhz  = (v23 >> 13) & 0x3FF;
+    unsigned int frac = v23 & 0x1FFF;
+    return (int64_t)mhz * 1000000 + (int64_t)frac * 125;
+}
+
+// C_SYScode (TS 102 361-4 Annex A.10): MODEL(2) | NET | SITE | PAR(2),
+// NET/SITE split by model: Tiny 9/3, Small 7/5, Large 4/8, Huge 2/10
+static void splitSysCode(unsigned int sic, uint8_t& model, uint16_t& net, uint16_t& site, uint8_t& par)
+{
+    model = (sic >> 14) & 0x3;
+    par   = sic & 0x3;
+    unsigned int mid = (sic >> 2) & 0xFFF;
+    switch (model)
+    {
+        case 0: net = mid >> 3;  site = mid & 0x007; break; // Tiny
+        case 1: net = mid >> 5;  site = mid & 0x01F; break; // Small
+        case 2: net = mid >> 8;  site = mid & 0x0FF; break; // Large
+        default: net = mid >> 10; site = mid & 0x3FF; break; // Huge
+    }
+}
+
+static const char *sysModelName(uint8_t model)
+{
+    switch (model)
+    {
+        case 0: return "Tiny";
+        case 1: return "Small";
+        case 2: return "Large";
+        default: return "Huge";
+    }
+}
+
+// DMRA Manufacturer's ID (FID) → vendor. From the ETSI DMR MFID registry
+// (dmrs-mfid.xls). Returns nullptr for the ETSI-standard FID (0x00) and
+// unrecognised codes so callers can fall back to a raw "MFID 0xNN".
+const char *DSDDMR::fidVendorName(unsigned char fid)
+{
+    switch (fid)
+    {
+        case 0x04: return "Flyde Micro";
+        case 0x05: return "PROD-EL";
+        case 0x06: return "Trident";      // Motorola Connect Plus in practice
+        case 0x07: return "RADIODATA";
+        case 0x08: return "Hytera";
+        case 0x09: return "ASELSAN";
+        case 0x0A: return "Kirisun";
+        case 0x0B: return "DMR Assoc";
+        case 0x10: return "Motorola";
+        case 0x13: return "EMC";
+        case 0x1C: return "EMC";
+        case 0x20: return "Kenwood";
+        case 0x33: return "Radio Activity";
+        case 0x3C: return "Radio Activity";
+        case 0x58: return "Tait";
+        case 0x68: return "Hytera";
+        case 0x77: return "Vertex";
+        default:   return nullptr;
+    }
+}
+
 void DSDDMR::noteCSBKSyncAcquired()
 {
     // Edge-triggered acquisition: only bump epoch when transitioning from unlocked to locked.
@@ -1510,6 +1587,435 @@ bool DSDDMR::shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, 
     return log;
 }
 
+void DSDDMR::noteTsccIdentity(unsigned int sic)
+{
+    uint8_t model, par;
+    uint16_t net, site;
+    splitSysCode(sic, model, net, site, par);
+
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_networkState.tsccDetected = true;
+    m_networkState.lastTsccActivityMs = nowMsSteady();
+    m_networkState.sysCode = (uint16_t) sic;
+    m_networkState.sysModel = model;
+    m_networkState.netId = net;
+    m_networkState.siteId = site;
+    m_networkState.par = par;
+    m_networkState.colorCode = m_colorCode;
+}
+
+void DSDDMR::parseAloha(const unsigned char *infoBits, std::ostringstream& msg, bool updateState)
+{
+    // C_ALOHA (TS 102 361-4 v1.12.1 Table 7.19)
+    unsigned int version          = bitsToUint(&infoBits[19], 3);
+    unsigned int tsccas           = bitsToUint(&infoBits[17], 1);
+    unsigned int siteSync         = bitsToUint(&infoBits[18], 1);
+    unsigned int offset           = bitsToUint(&infoBits[22], 1);
+    unsigned int activeConnection = bitsToUint(&infoBits[23], 1);
+    unsigned int mask             = bitsToUint(&infoBits[24], 5);
+    unsigned int serviceFunction  = bitsToUint(&infoBits[29], 2);
+    unsigned int nrandWait        = bitsToUint(&infoBits[31], 4);
+    unsigned int reg              = bitsToUint(&infoBits[35], 1);
+    unsigned int backoff          = bitsToUint(&infoBits[36], 4);
+    unsigned int sic              = bitsToUint(&infoBits[40], 16);
+    unsigned int msAddress        = bitsToUint(&infoBits[56], 24);
+
+    uint8_t model, par;
+    uint16_t net, site;
+    splitSysCode(sic, model, net, site, par);
+
+    msg << " Ver=" << version
+        << " TSCCAS=" << tsccas
+        << " Sync=" << siteSync
+        << " Offs=" << offset
+        << " Net=" << activeConnection
+        << " Mask=" << mask
+        << " SF=" << serviceFunction
+        << " NW=" << nrandWait
+        << " Reg=" << reg
+        << " Backoff=" << backoff
+        << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
+        << " (" << sysModelName(model) << " Net=" << net << " Site=" << site << " PAR=" << (int)par << ")"
+        << " MS=" << msAddress;
+
+    if (updateState)
+        noteTsccIdentity(sic);
+}
+
+void DSDDMR::parseAhoyOrRand(const unsigned char *infoBits, std::ostringstream& msg)
+{
+    // C_AHOY (Table 7.22); C_RAND shares the layout
+    unsigned int serviceOptionsMirror = bitsToUint(&infoBits[16], 7);
+    unsigned int serviceKindFlag      = bitsToUint(&infoBits[23], 1);
+    unsigned int als                  = bitsToUint(&infoBits[24], 1);
+    unsigned int groupFlag            = bitsToUint(&infoBits[25], 1);
+    unsigned int appendedBlocks       = bitsToUint(&infoBits[26], 2);
+    unsigned int serviceKind          = bitsToUint(&infoBits[28], 4);
+    unsigned int dst                  = bitsToUint(&infoBits[32], 24);
+    unsigned int src                  = bitsToUint(&infoBits[56], 24);
+
+    msg << " SOm=" << serviceOptionsMirror
+        << " SKF=" << serviceKindFlag
+        << " ALS=" << als
+        << " GI=" << groupFlag
+        << " App=" << appendedBlocks
+        << " Kind=" << serviceKind
+        << " Src=" << src
+        << " Dst=" << dst;
+}
+
+void DSDDMR::parseGrant(unsigned char csbko, const unsigned char *infoBits, std::ostringstream& msg, bool updateState)
+{
+    // Channel grant family 0x30-0x36 (TS 102 361-4 Tables 7.9-7.16). Common layout:
+    // bits 16-27 = logical physical channel number, 28 = TDMA slot, 29 = late entry
+    // (voice) / hi-rate (data), 30 = emergency, 31 = channel-offset flag,
+    // 32-55 = destination, 56-79 = source. The _DX duplex grants (0x35/0x36) are
+    // parsed with the same layout — field use off-air unverified.
+    unsigned int lpcn     = bitsToUint(&infoBits[16], 12);
+    unsigned int tdmaSlot = bitsToUint(&infoBits[28], 1);
+    unsigned int flag29   = bitsToUint(&infoBits[29], 1);
+    unsigned int emerg    = bitsToUint(&infoBits[30], 1);
+    unsigned int offset   = bitsToUint(&infoBits[31], 1);
+    unsigned int dst      = bitsToUint(&infoBits[32], 24);
+    unsigned int src      = bitsToUint(&infoBits[56], 24);
+
+    const bool isData  = (csbko == 0x33) || (csbko == 0x34) || (csbko == 0x36);
+    const bool isGroup = (csbko == 0x31) || (csbko == 0x32) || (csbko == 0x34);
+
+    msg << " Ch=" << lpcn
+        << " TS=" << tdmaSlot
+        << (isData ? " HiRate=" : " Late=") << flag29
+        << " Emerg=" << emerg
+        << " Offs=" << offset
+        << " Src=" << src
+        << " Dst=" << dst;
+
+    if (!updateState)
+        return;
+
+    const std::uint64_t nowMs = nowMsSteady();
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+
+    // Prune stale calls while we're here (same 10 s policy as the P25 grant handler)
+    auto& calls = m_networkState.activeCalls;
+    calls.erase(std::remove_if(calls.begin(), calls.end(),
+        [nowMs](const DMRNetworkState::ActiveCall& c) { return nowMs - c.lastSeenMs > 10000; }),
+        calls.end());
+
+    DMRNetworkState::ActiveCall *call = nullptr;
+    for (auto& c : calls)
+    {
+        if (c.lpcn == lpcn && c.slot == (int)tdmaSlot) { call = &c; break; }
+    }
+    if (!call)
+    {
+        calls.emplace_back();
+        call = &calls.back();
+        call->lpcn = (uint16_t)lpcn;
+        call->slot = (int)tdmaSlot;
+    }
+    call->tgid = dst;
+    call->srcAddr = src;
+    call->isGroup = isGroup;
+    call->isData = isData;
+    call->emergency = (emerg != 0);
+    call->lastSeenMs = nowMs;
+
+    if (isGroup && !isData)
+    {
+        auto& tgs = m_networkState.discoveredTalkGroups;
+        auto it = std::find_if(tgs.begin(), tgs.end(),
+            [dst](const DMRNetworkState::DiscoveredTalkGroup& t) { return t.tgid == dst; });
+        if (it == tgs.end())
+        {
+            DMRNetworkState::DiscoveredTalkGroup tg;
+            tg.tgid = dst;
+            tg.firstSeenMs = nowMs;
+            tg.lastSeenMs = nowMs;
+            tg.callCount = 1;
+            tgs.push_back(tg);
+        }
+        else
+        {
+            it->lastSeenMs = nowMs;
+            it->callCount++;
+        }
+    }
+}
+
+// Decode an MBC channel-definition (CDEF) block carried in a C_BCAST continuation.
+// Offsets are relative to the continuation block (dsd-fme's assembled-superframe
+// offsets minus 96). cdeftype 0 = absolute frequency parameters. Returns false if
+// no continuation or a non-absolute definition. Verified off-air 2026-08-16 against
+// a Hytera Tier III TSCC (163.287 MHz): LPCN 270-348 → 163.36-164.34 MHz, 12.5 kHz grid.
+static bool decodeCdef(const unsigned char *contBits, int nContBits,
+                       unsigned int& lpcn, int64_t& rxHz, int64_t& txHz)
+{
+    if (!contBits || nContBits < 80)
+        return false;
+    unsigned int cdeftype = bitsToUint(&contBits[16], 4);
+    if (cdeftype != 0)
+        return false;
+    lpcn          = bitsToUint(&contBits[22], 12);
+    unsigned int txInt  = bitsToUint(&contBits[34], 10);
+    unsigned int txStep = bitsToUint(&contBits[44], 13);
+    unsigned int rxInt  = bitsToUint(&contBits[57], 10);
+    unsigned int rxStep = bitsToUint(&contBits[67], 13);
+    rxHz = (int64_t)rxInt * 1000000 + (int64_t)rxStep * 125;
+    txHz = (int64_t)txInt * 1000000 + (int64_t)txStep * 125;
+    return true;
+}
+
+void DSDDMR::parseBcast(const unsigned char *infoBits, std::ostringstream& msg, bool updateState,
+                        const unsigned char *contBits, int nContBits)
+{
+    // C_BCAST (Table 7.20): AnnType(5) | Parms1(14) | Reg(1) | Backoff(4) | SIC(16) | Parms2(24)
+    unsigned int annType = bitsToUint(&infoBits[16], 5);
+    unsigned int parms1  = bitsToUint(&infoBits[21], 14);
+    unsigned int reg     = bitsToUint(&infoBits[35], 1);
+    unsigned int backoff = bitsToUint(&infoBits[36], 4);
+    unsigned int sic     = bitsToUint(&infoBits[40], 16);
+    unsigned int parms2  = bitsToUint(&infoBits[56], 24);
+
+    static const char *annNames[8] = {
+        "Ann_WD_TSCC", "CallTimer", "Vote_Now", "Local_Time",
+        "MassReg", "Chan_Freq", "Adjacent_Site", "Gen_Site_Params" };
+
+    msg << " " << (annType < 8 ? annNames[annType] : "AnnRsv")
+        << " (AnnType=" << annType << ")"
+        << " Reg=" << reg
+        << " Backoff=" << backoff
+        << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec;
+
+    const std::uint64_t nowMs = nowMsSteady();
+
+    // Learn an MBC CDEF channel→frequency relationship (Chan_Freq, and the
+    // Adjacent_Site/Vote_Now forms that carry an embedded absolute definition).
+    bool cdefPresent = false;
+    if ((annType == 2 || annType == 5 || annType == 6) && contBits)
+    {
+        unsigned int cdefLpcn = 0;
+        int64_t rxHz = 0, txHz = 0;
+        if (decodeCdef(contBits, nContBits, cdefLpcn, rxHz, txHz))
+        {
+            cdefPresent = true;
+            msg << std::dec << " [CDEF LPCN=" << cdefLpcn
+                << " RX=" << rxHz << "Hz TX=" << txHz << "Hz]";
+            const bool plausible = rxHz >= 25000000 && rxHz <= 1023000000 && cdefLpcn != 0;
+            if (updateState && plausible)
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                auto& lc = m_networkState.learnedChannels;
+                auto it = std::find_if(lc.begin(), lc.end(),
+                    [cdefLpcn](const DMRNetworkState::LearnedChannel& c) { return c.lpcn == cdefLpcn; });
+                if (it == lc.end()) { lc.emplace_back(); it = lc.end() - 1; }
+                it->lpcn = (uint16_t)cdefLpcn;
+                it->rxFreqHz = rxHz;
+                it->txFreqHz = txHz;
+                it->lastSeenMs = nowMs;
+            }
+        }
+    }
+
+    switch (annType)
+    {
+        case 0: // Ann_WD_TSCC: two announced/withdrawn control channels in Parms2
+        {
+            unsigned int ccCh1  = bitsToUint(&infoBits[25], 4);
+            unsigned int ccCh2  = bitsToUint(&infoBits[29], 4);
+            unsigned int ch1Wd  = bitsToUint(&infoBits[33], 1);  // 0=add 1=remove
+            unsigned int ch2Wd  = bitsToUint(&infoBits[34], 1);
+            unsigned int bcastCh1 = bitsToUint(&infoBits[56], 12);
+            unsigned int bcastCh2 = bitsToUint(&infoBits[68], 12);
+            msg << " CH1=" << bcastCh1 << "/CC" << ccCh1 << (ch1Wd ? "(rm)" : "(add)")
+                << " CH2=" << bcastCh2 << "/CC" << ccCh2 << (ch2Wd ? "(rm)" : "(add)");
+            break;
+        }
+        case 2: // Vote_Now advice
+        case 6: // Adjacent_Site
+        {
+            // a_channel = Parms2[12..23]. The adjacent/target site's identity is
+            // Parms1: a 14-bit C_SYScode without the PAR bits (Model|Net|Site) —
+            // per dsd-fme's dmr_decode_syscode(type!=0), verified off-air against
+            // the Capacity Max Net-2 sites. Hytera instead uses AnnType 6 as a
+            // channel-plan carrier (CDEF in the continuation, Parms1 not a
+            // syscode) — those record no adjacent-site entry.
+            unsigned int aChannel = bitsToUint(&infoBits[68], 12);
+            if (cdefPresent)
+            {
+                msg << " Ch=" << aChannel;
+                break;
+            }
+            unsigned int adjSysCode = (parms1 << 2) & 0xFFFF;  // PAR unknown → 0
+            uint8_t model, par; uint16_t net, site;
+            splitSysCode(adjSysCode, model, net, site, par);
+            msg << " AdjSIC=0x" << std::hex << std::setw(4) << std::setfill('0') << adjSysCode << std::dec
+                << " (Net=" << net << " Site=" << site << ")"
+                << " Ch=" << aChannel;
+            // Skip self-references (compare ignoring the PAR bits)
+            const bool isSelf = (m_networkState.sysCode != 0)
+                && ((adjSysCode >> 2) == (m_networkState.sysCode >> 2));
+            if (updateState && !isSelf)
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                auto& adj = m_networkState.adjacentSites;
+                auto it = std::find_if(adj.begin(), adj.end(),
+                    [adjSysCode](const DMRNetworkState::AdjacentSite& a)
+                    { return (a.sysCode >> 2) == (adjSysCode >> 2); });
+                if (it == adj.end()) { adj.emplace_back(); it = adj.end() - 1; }
+                it->sysCode = (uint16_t)adjSysCode;
+                it->lpcn = (uint16_t)aChannel;
+                it->voteNow = (annType == 2);
+                it->lastSeenMs = nowMs;
+            }
+            break;
+        }
+        case 3: // Local_Time
+            msg << " P1=0x" << std::hex << parms1 << " P2=0x" << std::setw(6) << std::setfill('0') << parms2 << std::dec;
+            break;
+        case 5: // Chan_Freq — the CDEF above carried the mapping; nothing else to show
+            break;
+        default: // CallTimer(1), MassReg(4), Gen_Site_Params(7), reserved
+            msg << " P1=0x" << std::hex << parms1 << " P2=0x" << std::setw(6) << std::setfill('0') << parms2 << std::dec;
+            break;
+    }
+
+    if (updateState)
+        noteTsccIdentity(sic);
+}
+
+void DSDDMR::parseMove(const unsigned char *infoBits, std::ostringstream& msg)
+{
+    // C_MOVE: MSs directed to another control channel. Layout (Mask/Ch positions
+    // off-air unverified): Mask(5) 16-20 | Ch(12) 21-32 | Rsv 33-34 | Reg 35 |
+    // Backoff(4) 36-39 | Rsv 40-55 | MS(24) 56-79
+    unsigned int mask    = bitsToUint(&infoBits[16], 5);
+    unsigned int lpcn    = bitsToUint(&infoBits[21], 12);
+    unsigned int reg     = bitsToUint(&infoBits[35], 1);
+    unsigned int backoff = bitsToUint(&infoBits[36], 4);
+    unsigned int ms      = bitsToUint(&infoBits[56], 24);
+
+    msg << " Mask=" << mask
+        << " Ch=" << lpcn
+        << " Reg=" << reg
+        << " Backoff=" << backoff
+        << " MS=" << ms;
+}
+
+void DSDDMR::parseCSBKPayload(unsigned char csbko, unsigned char mfid, const unsigned char *infoBits,
+                              std::ostringstream& msg, bool updateState,
+                              const unsigned char *contBits, int nContBits)
+{
+    // Vendor FIDs that follow the standard ETSI Tier III layouts — both verified
+    // off-air 2026-08-16: 0x08 Hytera (C_BCAST CDEF channel definitions, 163.287
+    // TSCC) and 0x10 Motorola Capacity Max (C_ALOHA etc., 163.950/162.925 TSCCs;
+    // dsd-fme decodes standard opcodes for FID 0x10 identically).
+    if (mfid != 0x00 && mfid != 0x08 && mfid != 0x10)
+    {
+        // Non-standard: raw hex of CSBK-specific bytes (bits 16–79)
+        msg << " Data=";
+        unsigned char raw[8] = {0};
+        for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
+        for (int i = 0; i < 8; i++)
+            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        msg << std::dec;
+        return;
+    }
+
+    switch (csbko)
+    {
+        case 0x19: // C_ALOHA
+            parseAloha(infoBits, msg, updateState);
+            break;
+        case 0x1C: // C_AHOY
+        case 0x1F: // C_RAND (same layout)
+            parseAhoyOrRand(infoBits, msg);
+            break;
+        case 0x20: // C_ACKD (Table 7.23)
+        {
+            unsigned int responseInfo = bitsToUint(&infoBits[16], 7);
+            unsigned int reasonCode   = bitsToUint(&infoBits[23], 8);
+            unsigned int reserved     = bitsToUint(&infoBits[31], 1);
+            unsigned int target       = bitsToUint(&infoBits[32], 24);
+            unsigned int addInfo      = bitsToUint(&infoBits[56], 24);
+            msg << " RspInfo=" << responseInfo
+                << " Reason=0x" << std::hex << std::setw(2) << std::setfill('0') << reasonCode << std::dec
+                << " Rsv=" << reserved
+                << " Tgt=" << target
+                << " AddInfo=" << addInfo;
+            break;
+        }
+        case 0x21: // Preamble CSBKs
+        {
+            unsigned char groupFlag    = infoBits[17];
+            unsigned char dataFlag     = infoBits[18];
+            unsigned int  blocksToFollow = bitsToUint(&infoBits[24], 6);
+            unsigned int  dst = bitsToUint(&infoBits[56], 24);
+            msg << " BTF=" << blocksToFollow
+                << " " << (groupFlag ? "G" : "U") << (dataFlag ? "D" : "V")
+                << " Dst=" << dst;
+            break;
+        }
+        case 0x28: // C_BCAST
+            parseBcast(infoBits, msg, updateState, contBits, nContBits);
+            break;
+        case 0x2E: // P_CLEAR (Table 7.30)
+        {
+            unsigned int physChan = bitsToUint(&infoBits[16], 12);
+            unsigned int gi       = bitsToUint(&infoBits[31], 1);
+            unsigned int dst      = bitsToUint(&infoBits[32], 24);
+            unsigned int src      = bitsToUint(&infoBits[56], 24);
+            msg << " Ch=" << physChan
+                << " GI=" << gi
+                << " Src=" << src
+                << " Dst=" << dst;
+            break;
+        }
+        case 0x2F: // P_PROTECT (Table 7.31)
+        {
+            unsigned int protectKind = bitsToUint(&infoBits[28], 3);
+            unsigned int gi          = bitsToUint(&infoBits[31], 1);
+            unsigned int dst         = bitsToUint(&infoBits[32], 24);
+            unsigned int src         = bitsToUint(&infoBits[56], 24);
+            msg << " Kind=" << protectKind
+                << " GI=" << gi
+                << " Src=" << src
+                << " Dst=" << dst;
+            break;
+        }
+        case 0x30: // PV_GRANT
+        case 0x31: // TV_GRANT
+        case 0x32: // BTV_GRANT
+        case 0x33: // PD_GRANT
+        case 0x34: // TD_GRANT
+        case 0x35: // PV_GRANT_DX
+        case 0x36: // PD_GRANT_DX
+            parseGrant(csbko, infoBits, msg, updateState);
+            break;
+        case 0x39: // C_MOVE
+            parseMove(infoBits, msg);
+            break;
+        default:
+        {
+            // Generic: destination at bits[32..55], source at bits[56..79]
+            unsigned int dst = bitsToUint(&infoBits[32], 24);
+            unsigned int src = bitsToUint(&infoBits[56], 24);
+            msg << " Src=" << src << " Dst=" << dst;
+            if (m_verbosity >= 2)
+            {
+                // Raw payload for unparsed opcodes (vendor messages etc.)
+                msg << " Data=";
+                unsigned char raw[8] = {0};
+                for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
+                for (int i = 0; i < 8; i++)
+                    msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+                msg << std::dec;
+            }
+            break;
+        }
+    }
+}
+
 void DSDDMR::decodeCSBK(const unsigned char *infoBits)
 {
     unsigned char lb    = infoBits[0];
@@ -1519,8 +2025,18 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
     // Verify CRC-CCITT-16 with TS 102 361-1 §B.3.12 CSBK mask.
     bool crcOK = csbkCRCOK(infoBits, 0xA5A5, m_verbosity);
 
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.csbkTotalCount++;
+        if (crcOK) m_networkState.csbkCrcOkCount++;
+        else       m_networkState.csbkCrcFailCount++;
+        // A recognised manufacturer FID on a clean frame identifies the vendor.
+        if (crcOK && mfid != 0x00 && fidVendorName(mfid))
+            m_networkState.vendorFid = mfid;
+    }
+
     const char *name = nullptr;
-    if (mfid == 0x00) name = csbkoName(csbko);
+    if (mfid == 0x00 || mfid == 0x08 || mfid == 0x10) name = csbkoName(csbko);
 
     std::ostringstream msg;
     msg << "CSBK["
@@ -1532,186 +2048,18 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
         << std::dec
         << (crcOK ? "" : " CRC-FAIL");
 
-    if (mfid == 0x00) // ETSI standard opcodes
-    {
-        if (csbko == 0x19) // C_ALOHA (TS 102 361-4 v1.12.1 Table 7.19)
-        {
-            unsigned int version          = bitsToUint(&infoBits[19], 3);
-            unsigned int tsccas           = bitsToUint(&infoBits[17], 1);
-            unsigned int siteSync         = bitsToUint(&infoBits[18], 1);
-            unsigned int offset           = bitsToUint(&infoBits[22], 1);
-            unsigned int activeConnection = bitsToUint(&infoBits[23], 1);
-            unsigned int mask             = bitsToUint(&infoBits[24], 5);
-            unsigned int serviceFunction  = bitsToUint(&infoBits[29], 2);
-            unsigned int nrandWait        = bitsToUint(&infoBits[31], 4);
-            unsigned int reg              = bitsToUint(&infoBits[35], 1);
-            unsigned int backoff          = bitsToUint(&infoBits[36], 4);
-            unsigned int sic              = bitsToUint(&infoBits[40], 16);
-            unsigned int msAddress        = bitsToUint(&infoBits[56], 24);
-
-            msg << " Ver=" << version
-                << " TSCCAS=" << tsccas
-                << " Sync=" << siteSync
-                << " Offs=" << offset
-                << " Net=" << activeConnection
-                << " Mask=" << mask
-                << " SF=" << serviceFunction
-                << " NW=" << nrandWait
-                << " Reg=" << reg
-                << " Backoff=" << backoff
-                << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
-                << " MS=" << msAddress;
-        }
-        else if (csbko == 0x1C) // C_AHOY (Table 7.22)
-        {
-            unsigned int serviceOptionsMirror = bitsToUint(&infoBits[16], 7);
-            unsigned int serviceKindFlag      = bitsToUint(&infoBits[23], 1);
-            unsigned int als                  = bitsToUint(&infoBits[24], 1);
-            unsigned int groupFlag            = bitsToUint(&infoBits[25], 1);
-            unsigned int appendedBlocks       = bitsToUint(&infoBits[26], 2);
-            unsigned int serviceKind          = bitsToUint(&infoBits[28], 4);
-            unsigned int dst                  = bitsToUint(&infoBits[32], 24);
-            unsigned int src                  = bitsToUint(&infoBits[56], 24);
-
-            msg << " SOm=" << serviceOptionsMirror
-                << " SKF=" << serviceKindFlag
-                << " ALS=" << als
-                << " GI=" << groupFlag
-                << " App=" << appendedBlocks
-                << " Kind=" << serviceKind
-                << " Src=" << src
-                << " Dst=" << dst;
-        }
-        else if (csbko == 0x20) // C_ACKD (Table 7.23)
-        {
-            unsigned int responseInfo = bitsToUint(&infoBits[16], 7);
-            unsigned int reasonCode   = bitsToUint(&infoBits[23], 8);
-            unsigned int reserved     = bitsToUint(&infoBits[31], 1);
-            unsigned int target       = bitsToUint(&infoBits[32], 24);
-            unsigned int addInfo      = bitsToUint(&infoBits[56], 24);
-
-            msg << " RspInfo=" << responseInfo
-                << " Reason=0x" << std::hex << std::setw(2) << std::setfill('0') << reasonCode << std::dec
-                << " Rsv=" << reserved
-                << " Tgt=" << target
-                << " AddInfo=" << addInfo;
-        }
-        else if (csbko == 0x28) // C_BCAST (Table 7.20)
-        {
-            unsigned int annType = bitsToUint(&infoBits[16], 5);
-            unsigned int parms1  = bitsToUint(&infoBits[21], 14);
-            unsigned int reg     = bitsToUint(&infoBits[35], 1);
-            unsigned int backoff = bitsToUint(&infoBits[36], 4);
-            unsigned int sic     = bitsToUint(&infoBits[40], 16);
-            unsigned int parms2  = bitsToUint(&infoBits[56], 24);
-
-            msg << " AnnType=" << annType
-                << " P1=" << parms1
-                << " Reg=" << reg
-                << " Backoff=" << backoff
-                << " SIC=0x" << std::hex << std::setw(4) << std::setfill('0') << sic << std::dec
-                << " P2=0x" << std::hex << std::setw(6) << std::setfill('0') << parms2 << std::dec;
-        }
-        else if (csbko == 0x2E) // P_CLEAR (Table 7.30)
-        {
-            unsigned int physChan = bitsToUint(&infoBits[16], 12);
-            unsigned int gi       = bitsToUint(&infoBits[31], 1);
-            unsigned int dst      = bitsToUint(&infoBits[32], 24);
-            unsigned int src      = bitsToUint(&infoBits[56], 24);
-
-            msg << " Ch=" << physChan
-                << " GI=" << gi
-                << " Src=" << src
-                << " Dst=" << dst;
-        }
-        else if (csbko == 0x2F) // P_PROTECT (Table 7.31)
-        {
-            unsigned int protectKind = bitsToUint(&infoBits[28], 3);
-            unsigned int gi          = bitsToUint(&infoBits[31], 1);
-            unsigned int dst         = bitsToUint(&infoBits[32], 24);
-            unsigned int src         = bitsToUint(&infoBits[56], 24);
-
-            msg << " Kind=" << protectKind
-                << " GI=" << gi
-                << " Src=" << src
-                << " Dst=" << dst;
-        }
-        else if (csbko == 0x31) // TV_GRANT (Table 7.11)
-        {
-            unsigned int physChan = bitsToUint(&infoBits[16], 12);
-            unsigned int tdmaSlot = bitsToUint(&infoBits[28], 1);
-            unsigned int late     = bitsToUint(&infoBits[29], 1);
-            unsigned int emerg    = bitsToUint(&infoBits[30], 1);
-            unsigned int offset   = bitsToUint(&infoBits[31], 1);
-            unsigned int dst      = bitsToUint(&infoBits[32], 24);
-            unsigned int src      = bitsToUint(&infoBits[56], 24);
-
-            msg << " Ch=" << physChan
-                << " TS=" << tdmaSlot
-                << " Late=" << late
-                << " Emerg=" << emerg
-                << " Offs=" << offset
-                << " Src=" << src
-                << " Dst=" << dst;
-        }
-        else if (csbko == 0x34) // TD_GRANT (Table 7.15)
-        {
-            unsigned int physChan = bitsToUint(&infoBits[16], 12);
-            unsigned int tdmaSlot = bitsToUint(&infoBits[28], 1);
-            unsigned int hiRate   = bitsToUint(&infoBits[29], 1);
-            unsigned int emerg    = bitsToUint(&infoBits[30], 1);
-            unsigned int offset   = bitsToUint(&infoBits[31], 1);
-            unsigned int dst      = bitsToUint(&infoBits[32], 24);
-            unsigned int src      = bitsToUint(&infoBits[56], 24);
-
-            msg << " Ch=" << physChan
-                << " TS=" << tdmaSlot
-                << " HiRate=" << hiRate
-                << " Emerg=" << emerg
-                << " Offs=" << offset
-                << " Src=" << src
-                << " Dst=" << dst;
-        }
-        else if (csbko == 0x21) // Preamble CSBKs
-        {
-            unsigned char groupFlag    = infoBits[17];
-            unsigned char dataFlag     = infoBits[18];
-            unsigned int  blocksToFollow = bitsToUint(&infoBits[24], 6);
-            unsigned int  dst = bitsToUint(&infoBits[56], 24);
-            msg << " BTF=" << blocksToFollow
-                << " " << (groupFlag ? "G" : "U") << (dataFlag ? "D" : "V")
-                << " Dst=" << dst;
-        }
-        else
-        {
-            // Generic: destination at bits[32..55], source at bits[56..79]
-            unsigned int dst = bitsToUint(&infoBits[32], 24);
-            unsigned int src = bitsToUint(&infoBits[56], 24);
-            msg << " Src=" << src << " Dst=" << dst;
-        }
-    }
-    else
-    {
-        // Non-standard: raw hex of CSBK-specific bytes (bits 16–79)
-        msg << " Data=";
-        unsigned char raw[8] = {0};
-        for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
-        for (int i = 0; i < 8; i++)
-        {
-            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
-        }
-        msg << std::dec;
-    }
+    // Fields are logged even on CRC failure (for bring-up), but state only mutates on CRC OK.
+    parseCSBKPayload(csbko, mfid, infoBits, msg, crcOK);
 
     msg << " LB=" << (int)lb;
     const std::string logLine = msg.str();
     if (shouldLogCSBK(csbko, mfid, crcOK, logLine)) DSD_LOG(logLine);
 
-    // Update slot text: "[act][CC] CSB [opHex] [dst7]"
+    // Update slot text: "[act][CC] CSB [opHex] [dst8]"
     char opBuf[20];
     unsigned int dst = bitsToUint(&infoBits[(csbko == 0x21 || csbko == 0x19) ? 56 : 32], 24);
-    snprintf(opBuf, sizeof(opBuf), "%02X %7u", (unsigned)csbko, dst);
-    memcpy(&m_slotText[8], opBuf, 10);
+    snprintf(opBuf, sizeof(opBuf), "%02X %8u", (unsigned)csbko, dst);
+    memcpy(&m_slotText[8], opBuf, 11);
 }
 
 void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
@@ -1720,36 +2068,195 @@ void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
     unsigned char mfid  = (unsigned char) bitsToUint(&infoBits[8], 8);
     bool crcOK = csbkCRCOK(infoBits, 0xAAAA, m_verbosity); // TS 102 361-1 §B.3.12
 
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.csbkTotalCount++;
+        if (crcOK) m_networkState.csbkCrcOkCount++;
+        else       m_networkState.csbkCrcFailCount++;
+    }
+
     unsigned int dst = bitsToUint(&infoBits[32], 24);
     unsigned int src = bitsToUint(&infoBits[56], 24);
 
-    DSD_LOG("MBC-Hdr["
-        << (m_slot == DSDDMRSlot1 ? "1" : "2")
-        << "] CSBKO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)csbko
-        << " MFId=0x" << std::setw(2) << (int)mfid
-        << std::dec
-        << " Src=" << src << " Dst=" << dst
-        << (crcOK ? "" : " CRC-FAIL"));
+    if (m_verbosity >= 2 || !crcOK)
+    {
+        DSD_LOG("MBC-Hdr["
+            << (m_slot == DSDDMRSlot1 ? "1" : "2")
+            << "] CSBKO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)csbko
+            << " MFId=0x" << std::setw(2) << (int)mfid
+            << std::dec
+            << " Src=" << src << " Dst=" << dst
+            << (crcOK ? "" : " CRC-FAIL"));
+    }
+
+    // Bring-up aid: raw 96-bit dump (incl. CRC) of every MBC header in arrival order
+    if (m_verbosity >= 3)
+    {
+        unsigned char raw[12] = {0};
+        for (int i = 0; i < 96; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+        std::ostringstream rawMsg;
+        rawMsg << "MBC-RAW-H[" << (m_slot == DSDDMRSlot1 ? "1" : "2") << "] ";
+        for (int i = 0; i < 12; i++)
+            rawMsg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        DSD_LOG(rawMsg.str());
+    }
+
+    // Start (or restart) this slot's multi-block assembly on a CRC-clean header
+    const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
+    MBCAssembly& asmb = m_mbcAssembly[slotIdx];
+    asmb.active = false;
+    if (crcOK)
+    {
+        asmb.csbko = csbko;
+        asmb.mfid = mfid;
+        memcpy(asmb.blockBits[0], infoBits, 96);
+        asmb.numBlocks = 1;
+        asmb.startMs = nowMsSteady();
+        asmb.active = true;
+    }
 
     char opBuf[20];
-    snprintf(opBuf, sizeof(opBuf), "%02X %7u", (unsigned)csbko, dst);
-    memcpy(&m_slotText[8], opBuf, 10);
+    snprintf(opBuf, sizeof(opBuf), "%02X %8u", (unsigned)csbko, dst);
+    memcpy(&m_slotText[8], opBuf, 11);
 }
 
 void DSDDMR::decodeMBCContinuation(const unsigned char *infoBits)
 {
-    // Pack 96 bits into 12 bytes and log as hex
-    unsigned char raw[12] = {0};
-    for (int i = 0; i < 96; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+    const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
+    MBCAssembly& asmb = m_mbcAssembly[slotIdx];
+
+    // Bring-up aid: raw 96-bit dump of every continuation block in arrival order
+    if (m_verbosity >= 3)
+    {
+        unsigned char raw[12] = {0};
+        for (int i = 0; i < 96; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+        std::ostringstream rawMsg;
+        rawMsg << "MBC-RAW-C[" << (m_slot == DSDDMRSlot1 ? "1" : "2") << "] ";
+        for (int i = 0; i < 12; i++)
+            rawMsg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        DSD_LOG(rawMsg.str());
+    }
+
+    const std::uint64_t nowMs = nowMsSteady();
+    if (asmb.active && (nowMs - asmb.startMs > 720 || asmb.numBlocks >= 8))
+    {
+        // Stale or oversized assembly — abandon it (blocks arrive every 60 ms per slot)
+        asmb.active = false;
+    }
+
+    if (!asmb.active)
+    {
+        // Orphan continuation (no CRC-clean header seen): log raw hex at high verbosity
+        if (m_verbosity >= 2)
+        {
+            unsigned char raw[12] = {0};
+            for (int i = 0; i < 96; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+            std::ostringstream msg;
+            msg << "MBC-Cont[" << (m_slot == DSDDMRSlot1 ? "1" : "2") << "] (orphan) ";
+            for (int i = 0; i < 12; i++)
+            {
+                msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+                if (i % 4 == 3) msg << " ";
+            }
+            DSD_LOG(msg.str());
+        }
+        return;
+    }
+
+    memcpy(asmb.blockBits[asmb.numBlocks], infoBits, 96);
+    asmb.numBlocks++;
+
+    if (infoBits[0]) // LB: last block of the multi-block CSBK
+    {
+        processAssembledMBC(slotIdx);
+        asmb.active = false;
+    }
+}
+
+void DSDDMR::processAssembledMBC(int slotIdx)
+{
+    MBCAssembly& asmb = m_mbcAssembly[slotIdx];
+
+    // Multi-block CRC: last 16 bits of the last block. Computed over ALL
+    // continuation blocks' data bits (LB bit included, header block excluded,
+    // trailing CRC excluded): CRC-CCITT16 MSB-first, init 0, XOR 0xFFFF, no
+    // PDU mask. Confirmed off-air 2026-08-16 against a Hytera Tier III TSCC
+    // (7/7 blocks verified); matches dsd-fme's dmr_block_assembler span.
+    unsigned char crcBytes[8 * 12] = {0};
+    int nBits = 0;
+    for (int b = 1; b < asmb.numBlocks; b++)
+    {
+        const int upTo = (b == asmb.numBlocks - 1) ? 80 : 96;
+        for (int i = 0; i < upTo; i++)
+        {
+            if (asmb.blockBits[b][i]) crcBytes[nBits / 8] |= (0x80 >> (nBits % 8));
+            nBits++;
+        }
+    }
+    const uint16_t computed = crcCCITT16(crcBytes, nBits / 8, 0x0000) ^ 0xFFFF;
+    const unsigned char *lastBlock = asmb.blockBits[asmb.numBlocks - 1];
+    const uint16_t received = (uint16_t) bitsToUint(&lastBlock[80], 16);
+    const bool mbCrcOK = (computed == received);
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (mbCrcOK) m_networkState.mbcAssembledCount++;
+        else         m_networkState.mbcCrcFailCount++;
+        if (mbCrcOK && asmb.mfid != 0x00 && fidVendorName(asmb.mfid))
+            m_networkState.vendorFid = asmb.mfid;
+    }
+
+    // The C_BCAST channel-definition (CDEF) block lives in the first continuation
+    // at fixed offsets that include the block's own bit 0 (LB) — pass the RAW
+    // continuation block so decodeCdef()'s offsets line up (the CRC span above,
+    // by contrast, strips the LB bit).
+    const unsigned char *contBits = (asmb.numBlocks >= 2) ? asmb.blockBits[1] : nullptr;
+    const int nContBits = (asmb.numBlocks >= 2) ? 96 : 0;
+
+    const char *name = (asmb.mfid == 0x00 || asmb.mfid == 0x08 || asmb.mfid == 0x10)
+        ? csbkoName(asmb.csbko) : nullptr;
 
     std::ostringstream msg;
-    msg << "MBC-Cont[" << (m_slot == DSDDMRSlot1 ? "1" : "2") << "] ";
-    for (int i = 0; i < 12; i++)
+    msg << "MBC["
+        << (slotIdx == 0 ? "1" : "2")
+        << "] "
+        << (name ? name : "Unknown   ")
+        << " CSBKO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)asmb.csbko
+        << " MFId=0x"  << std::setw(2) << (int)asmb.mfid
+        << std::dec
+        << " Blocks=" << asmb.numBlocks;
+
+    // Only mutate network state when the multi-block CRC is good — the CDEF and
+    // other payload fields live in the CRC-protected continuation blocks.
+    parseCSBKPayload(asmb.csbko, asmb.mfid, asmb.blockBits[0], msg, mbCrcOK, contBits, nContBits);
+
+    if (!mbCrcOK)
     {
-        msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
-        if (i % 4 == 3) msg << " ";
+        msg << " MB-CRC-FAIL (rx=0x" << std::hex << std::setw(4) << std::setfill('0') << received
+            << " calc=0x" << std::setw(4) << computed
+            << " mask=0x" << std::setw(4) << (uint16_t)(received ^ computed) << std::dec << ")";
     }
-    DSD_LOG(msg.str());
+
+    // Raw continuation hex for off-air validation of MBC field layouts
+    if (m_verbosity >= 2)
+    {
+        msg << " Cont=";
+        unsigned char raw[12] = {0};
+        int n = 0;
+        for (int i = 0; i < nContBits && i < 96; i++)
+        {
+            if (contBits[i]) raw[n / 8] |= (0x80 >> (n % 8));
+            n++;
+        }
+        for (int i = 0; i < (n + 7) / 8; i++)
+            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        msg << std::dec;
+    }
+
+    const std::string logLine = msg.str();
+    // Distinct rate-limiter key space for assembled MBCs (bit 25 set via mfid-space collision
+    // is avoided by offsetting the opcode)
+    if (shouldLogCSBK(asmb.csbko | 0x40, asmb.mfid, mbCrcOK, logLine)) DSD_LOG(logLine);
 }
 
 } // namespace DSDcc
