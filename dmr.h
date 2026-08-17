@@ -168,6 +168,17 @@ public:
         return m_networkState;
     }
 
+    // Discard all accumulated network state (identity, learned channel plan,
+    // calls, talkgroups, counters). Called from the UI thread when the control
+    // receiver is retuned — the old system's data is stale. An in-flight MBC
+    // assembly is DSP-thread-owned (not mutex-protected) and self-aborts via
+    // its 720 ms staleness timeout, so it is deliberately not touched here.
+    void resetNetworkState()
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState = DMRNetworkState();
+    }
+
     void setVerbosity(int verbosity) { m_verbosity = verbosity; }
 
     // DMRA Manufacturer's ID (FID) → vendor name, or nullptr for the ETSI-standard

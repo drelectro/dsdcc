@@ -1363,8 +1363,22 @@ bool DSDDMR::decodeBPTC196_96(unsigned char *infoBits)
 // CSBK / MBC decoders
 // ========================================================================================
 
-static const char *csbkoName(unsigned char csbko)
+static const char *csbkoName(unsigned char csbko, unsigned char mfid)
 {
+    if (mfid == 0x10)
+    {
+        // Motorola vendor opcodes (Cap+ / Cap Max), names per dsd-fme/SDRTrunk
+        switch (csbko)
+        {
+            case 0x29: return "M_RevSync ";  // enhanced data revert beacon
+            case 0x2A: return "M_RevWin  ";  // enhanced data revert window grant
+            case 0x3A: return "M_CapStat ";
+            case 0x3B: return "M_CapAdj  ";  // Cap+ adjacent sites
+            case 0x3E: return "M_CapChSt ";  // Cap+ channel status
+            default: break;                  // fall through to standard names
+        }
+    }
+
     // Tier III aliases from ETSI TS 102 361-4 v1.12.1 (tables 7.1-7.4)
     // plus a few legacy labels kept for compatibility with existing logs.
     switch (csbko)
@@ -1394,7 +1408,7 @@ static const char *csbkoName(unsigned char csbko)
         case 0x1E: return "C_ACKVIT  ";
         case 0x1F: return "C_RAND    ";
         case 0x20: return "C_ACKD    ";
-        case 0x21: return "Preamble  ";
+        case 0x21: return "C_ACKU    ";
         case 0x22: return "P_ACKD    ";
         case 0x23: return "P_ACKU    ";
         case 0x28: return "C_BCAST   ";
@@ -1409,6 +1423,7 @@ static const char *csbkoName(unsigned char csbko)
         case 0x35: return "PV_GRANTDX";
         case 0x36: return "PD_GRANTDX";
         case 0x39: return "C_MOVE    ";
+        case 0x3D: return "Preamble  ";
         default:   return nullptr;
     }
 }
@@ -1502,6 +1517,77 @@ static const char *sysModelName(uint8_t model)
         case 1: return "Small";
         case 2: return "Large";
         default: return "Huge";
+    }
+}
+
+// ETSI TS 102 361-4 reserved gateway addresses (Annex B). Returns nullptr for
+// ordinary MS/TG addresses and unassigned reserved values.
+static const char *gatewayName(unsigned int addr)
+{
+    switch (addr)
+    {
+        case 0xFFFEC0: return "PSTNI";
+        case 0xFFFEC1: return "PABXI";
+        case 0xFFFEC2: return "LINEI";
+        case 0xFFFEC3: return "IPI";
+        case 0xFFFEC4: return "SUPLI";
+        case 0xFFFEC5: return "SDMI";
+        case 0xFFFEC6: return "REGI";
+        case 0xFFFEC7: return "MSI";
+        case 0xFFFEC9: return "DIVERTI";
+        case 0xFFFECA: return "TSI";
+        case 0xFFFECB: return "DISPATI";
+        case 0xFFFECC: return "STUNI";
+        case 0xFFFECD: return "AUTHI";
+        case 0xFFFECE: return "GPI";
+        case 0xFFFECF: return "KILLI";
+        case 0xFFFED0: return "PSTNDI";
+        case 0xFFFED1: return "PABXDI";
+        case 0xFFFED2: return "LINEDI";
+        case 0xFFFED3: return "DISPATDI";
+        case 0xFFFED4: return "ALLMSI";
+        case 0xFFFED5: return "IPDI";
+        case 0xFFFED6: return "DGNAI";
+        case 0xFFFED7: return "TATTSI";
+        case 0xFFFFFD: return "ALLMSIDL";
+        case 0xFFFFFE: return "ALLMSIDZ";
+        case 0xFFFFFF: return "ALLMSID";
+        default:       return nullptr;
+    }
+}
+
+// Format a 24-bit address: named gateways by name, other reserved/system-range
+// addresses (0xFFFE00 up, e.g. Tait's 0xFFFEF2 system identity) as hex,
+// ordinary MS/TG addresses as decimal.
+static void appendAddr(std::ostringstream& msg, unsigned int addr)
+{
+    const char *gw = gatewayName(addr);
+    if (gw)
+        msg << gw;
+    else if (addr >= 0xFFFE00)
+        msg << "0x" << std::hex << std::uppercase << addr << std::nouppercase << std::dec;
+    else
+        msg << addr;
+}
+
+// AHOY/C_RAND service kinds (TS 102 361-4 Table 7.22)
+static const char *serviceKindName(unsigned int kind)
+{
+    switch (kind)
+    {
+        case 0: case 1:   return "Voice";
+        case 2: case 3:   return "PacketData";
+        case 4: case 5:   return "ShortData";
+        case 6:           return "ShortDataPoll";
+        case 7:           return "StatusTransport";
+        case 8:           return "CallDiversion";
+        case 9:           return "CallAnswer";
+        case 10:          return "FDVoice";
+        case 11:          return "FDPacketData";
+        case 13:          return "SupplService";
+        case 14:          return "Registration";
+        case 15:          return "CancelCall";
+        default:          return "Rsv";
     }
 }
 
@@ -1654,14 +1740,17 @@ void DSDDMR::parseAhoyOrRand(const unsigned char *infoBits, std::ostringstream& 
     unsigned int dst                  = bitsToUint(&infoBits[32], 24);
     unsigned int src                  = bitsToUint(&infoBits[56], 24);
 
-    msg << " SOm=" << serviceOptionsMirror
+    msg << " " << serviceKindName(serviceKind)
+        << " (Kind=" << serviceKind << ")"
+        << " SOm=" << serviceOptionsMirror
         << " SKF=" << serviceKindFlag
         << " ALS=" << als
         << " GI=" << groupFlag
         << " App=" << appendedBlocks
-        << " Kind=" << serviceKind
-        << " Src=" << src
-        << " Dst=" << dst;
+        << " Src=";
+    appendAddr(msg, src);
+    msg << " Dst=";
+    appendAddr(msg, dst);
 }
 
 void DSDDMR::parseGrant(unsigned char csbko, const unsigned char *infoBits, std::ostringstream& msg, bool updateState)
@@ -1906,13 +1995,64 @@ void DSDDMR::parseCSBKPayload(unsigned char csbko, unsigned char mfid, const uns
                               std::ostringstream& msg, bool updateState,
                               const unsigned char *contBits, int nContBits)
 {
-    // Vendor FIDs that follow the standard ETSI Tier III layouts — both verified
-    // off-air 2026-08-16: 0x08 Hytera (C_BCAST CDEF channel definitions, 163.287
-    // TSCC) and 0x10 Motorola Capacity Max (C_ALOHA etc., 163.950/162.925 TSCCs;
-    // dsd-fme decodes standard opcodes for FID 0x10 identically).
-    if (mfid != 0x00 && mfid != 0x08 && mfid != 0x10)
+    // Vendor FIDs that follow the standard ETSI Tier III layouts — all verified
+    // off-air 2026-08-16/17: 0x08 Hytera (C_BCAST CDEF channel definitions,
+    // 163.287 TSCC), 0x10 Motorola Capacity Max (C_ALOHA etc., 163.950/162.925
+    // TSCCs), 0x58 Tait (C_AHOY short-data polls with standard field layout,
+    // 166.012/165.950 TSCCs).
+    if (mfid != 0x00 && mfid != 0x08 && mfid != 0x10 && mfid != 0x58)
     {
         // Non-standard: raw hex of CSBK-specific bytes (bits 16–79)
+        msg << " Data=";
+        unsigned char raw[8] = {0};
+        for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
+        for (int i = 0; i < 8; i++)
+            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        msg << std::dec;
+        return;
+    }
+
+    // Cap+ Channel Status (FID 0x10, 0x3E): FL/TS/rest-LSN header per dsd-fme;
+    // the active-channel bank decode is not implemented (Cap+ is out of scope
+    // for Tier III trunk following) — raw hex retained for inspection.
+    if (mfid == 0x10 && csbko == 0x3E)
+    {
+        unsigned int fl   = bitsToUint(&infoBits[16], 2);
+        unsigned int ts   = bitsToUint(&infoBits[18], 1);
+        unsigned int rest = bitsToUint(&infoBits[20], 4);
+        msg << " FL=" << fl << " TS=" << (ts + 1) << " RestLSN=" << rest
+            << " Data=";
+        unsigned char raw[8] = {0};
+        for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
+        for (int i = 0; i < 8; i++)
+            msg << std::hex << std::setw(2) << std::setfill('0') << (int)raw[i];
+        msg << std::dec;
+        return;
+    }
+
+    // Motorola enhanced-data-revert messages (FID 0x10) — field layout inferred
+    // off-air 2026-08-17 (162.200 Cap+ GPS revert channel); raw hex retained.
+    if (mfid == 0x10 && (csbko == 0x29 || csbko == 0x2A))
+    {
+        if (csbko == 0x29)
+        {
+            // Beacon: incrementing counter + window count, system address
+            unsigned int counter = bitsToUint(&infoBits[40], 8);
+            unsigned int windows = bitsToUint(&infoBits[48], 8);
+            unsigned int sysAddr = bitsToUint(&infoBits[56], 24);
+            msg << " Cnt=" << counter << " Windows=" << windows << " Sys=";
+            appendAddr(msg, sysAddr);
+        }
+        else
+        {
+            // Window assignment: radio + window fields
+            unsigned int radio  = bitsToUint(&infoBits[24], 16);
+            unsigned int winRaw = bitsToUint(&infoBits[40], 8);
+            unsigned int nWin   = bitsToUint(&infoBits[48], 8);
+            msg << " Radio=" << radio
+                << " Win=0x" << std::hex << std::setw(2) << std::setfill('0') << winRaw << std::dec
+                << " Windows=" << nWin;
+        }
         msg << " Data=";
         unsigned char raw[8] = {0};
         for (int i = 0; i < 64; i++) raw[i / 8] |= (infoBits[16 + i] << (7 - (i % 8)));
@@ -1932,6 +2072,7 @@ void DSDDMR::parseCSBKPayload(unsigned char csbko, unsigned char mfid, const uns
             parseAhoyOrRand(infoBits, msg);
             break;
         case 0x20: // C_ACKD (Table 7.23)
+        case 0x21: // C_ACKU (same layout)
         {
             unsigned int responseInfo = bitsToUint(&infoBits[16], 7);
             unsigned int reasonCode   = bitsToUint(&infoBits[23], 8);
@@ -1941,19 +2082,26 @@ void DSDDMR::parseCSBKPayload(unsigned char csbko, unsigned char mfid, const uns
             msg << " RspInfo=" << responseInfo
                 << " Reason=0x" << std::hex << std::setw(2) << std::setfill('0') << reasonCode << std::dec
                 << " Rsv=" << reserved
-                << " Tgt=" << target
-                << " AddInfo=" << addInfo;
+                << " Tgt=";
+            appendAddr(msg, target);
+            msg << " AddInfo=";
+            appendAddr(msg, addInfo);
             break;
         }
-        case 0x21: // Preamble CSBKs
+        case 0x3D: // Preamble CSBK (TS 102 361-1 §9.1.7; MMDVM CSBKO_PRECCSBK)
         {
-            unsigned char groupFlag    = infoBits[17];
-            unsigned char dataFlag     = infoBits[18];
-            unsigned int  blocksToFollow = bitsToUint(&infoBits[24], 6);
-            unsigned int  dst = bitsToUint(&infoBits[56], 24);
-            msg << " BTF=" << blocksToFollow
-                << " " << (groupFlag ? "G" : "U") << (dataFlag ? "D" : "V")
-                << " Dst=" << dst;
+            unsigned char contentFlag = infoBits[16];  // 0 = CSBK follows, 1 = data
+            unsigned char groupFlag   = infoBits[17];
+            unsigned int  blocksToFollow = bitsToUint(&infoBits[24], 8);
+            unsigned int  dst = bitsToUint(&infoBits[32], 24);
+            unsigned int  src = bitsToUint(&infoBits[56], 24);
+            msg << " " << (groupFlag ? "Grp" : "Ind")
+                << (contentFlag ? " Data" : " CSBK")
+                << " BTF=" << blocksToFollow
+                << " Src=";
+            appendAddr(msg, src);
+            msg << " Dst=";
+            appendAddr(msg, dst);
             break;
         }
         case 0x28: // C_BCAST
@@ -2036,7 +2184,7 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
     }
 
     const char *name = nullptr;
-    if (mfid == 0x00 || mfid == 0x08 || mfid == 0x10) name = csbkoName(csbko);
+    if (mfid == 0x00 || mfid == 0x08 || mfid == 0x10 || mfid == 0x58) name = csbkoName(csbko, mfid);
 
     std::ostringstream msg;
     msg << "CSBK["
@@ -2057,7 +2205,7 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
 
     // Update slot text: "[act][CC] CSB [opHex] [dst8]"
     char opBuf[20];
-    unsigned int dst = bitsToUint(&infoBits[(csbko == 0x21 || csbko == 0x19) ? 56 : 32], 24);
+    unsigned int dst = bitsToUint(&infoBits[(csbko == 0x19) ? 56 : 32], 24);
     snprintf(opBuf, sizeof(opBuf), "%02X %8u", (unsigned)csbko, dst);
     memcpy(&m_slotText[8], opBuf, 11);
 }
@@ -2213,8 +2361,9 @@ void DSDDMR::processAssembledMBC(int slotIdx)
     const unsigned char *contBits = (asmb.numBlocks >= 2) ? asmb.blockBits[1] : nullptr;
     const int nContBits = (asmb.numBlocks >= 2) ? 96 : 0;
 
-    const char *name = (asmb.mfid == 0x00 || asmb.mfid == 0x08 || asmb.mfid == 0x10)
-        ? csbkoName(asmb.csbko) : nullptr;
+    const char *name = (asmb.mfid == 0x00 || asmb.mfid == 0x08 || asmb.mfid == 0x10
+                        || asmb.mfid == 0x58)
+        ? csbkoName(asmb.csbko, asmb.mfid) : nullptr;
 
     std::ostringstream msg;
     msg << "MBC["
