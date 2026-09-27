@@ -141,6 +141,16 @@ public:
         return m_networkState;
     }
 
+    //! Zero the cumulative TSBK counters only (idents, talk groups etc. are kept).
+    void resetCounters()
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_networkState.tsbkTotalCount = 0;
+        m_networkState.crcOkCount = 0;
+        m_networkState.crcFailCount = 0;
+        m_networkState.trellisFailCount = 0;
+    }
+
 
     DSDP25P1(DSDDecoder *dsdDecoder);
     ~DSDP25P1();

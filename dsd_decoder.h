@@ -241,6 +241,7 @@ public:
 
     const DSDDMR& getDMRDecoder() const { return m_dsdDMR; }
     void resetDMRNetworkState() { m_dsdDMR.resetNetworkState(); }
+    void resetP25Counters() { m_dsdP25P1.resetCounters(); }
     void resetDMRChannelStatus() { m_dsdDMR.resetChannelStatus(); }
     const DSDDstar& getDStarDecoder() const { return m_dsdDstar; }
     const DSDdPMR& getDPMRDecoder() const { return m_dsdDPMR; }
