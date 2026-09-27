@@ -37,6 +37,12 @@ public:
         FilterP25      //!< P25 Phase 1: RRC alpha=0.2 matched filter
     } FilterMode;
 
+    typedef enum
+    {
+        TimingLegacy,  //!< DSDcc zero-crossing clock with heuristic correction table
+        TimingGardner  //!< Gardner loop with interpolated strobe (4800 baud only; default)
+    } TimingRecovery;
+
     explicit DSDSymbol(DSDDecoder *dsdDecoder);
     ~DSDSymbol();
 
@@ -48,6 +54,8 @@ public:
     void setFSK(unsigned int nbSymbols, bool inverted=false);
     void setNoSignal(bool noSignal) { m_noSignal = noSignal; }
     void setFilterMode(FilterMode mode); //!< select protocol-specific input filter and PLL tuning
+    void setTimingRecovery(TimingRecovery mode) { m_timingRecovery = mode; resetGardner(); }
+    TimingRecovery getTimingRecovery() const { return m_timingRecovery; }
     bool pushSample(short sample); //!< push a new sample into the decoder. Returns true if a new symbol is available
 
     int getSymbol() const { return m_symbol; }
@@ -130,6 +138,25 @@ private:
     DoubleBuffer<unsigned char> m_binSymbolBuffer;    //!< digitized symbol
     DoubleBuffer<unsigned char> m_syncSymbolBuffer;   //!< symbol digitized for synchronization: positive is 1, negative is 3
     DoubleBuffer<unsigned char> m_nonInvertedSyncSymbolBuffer; //!< same but resetting to positive sync
+
+    // Gardner timing recovery (XMC fork) - see pushSampleGardner()
+    bool pushSampleGardner(short sample);
+    void resetGardner();
+    static constexpr double kGardnerKp = 0.02;    //!< proportional gain (x sps per unit error)
+    static constexpr double kGardnerKi = 0.0005;  //!< integral gain
+    static constexpr int kGardnerHist = 64;        //!< sample history for interpolation
+    static constexpr int kAcqSyms = 48;            //!< phase-acquisition span after a (re)start
+    TimingRecovery m_timingRecovery = TimingGardner;
+    float  m_gHist[kGardnerHist] = {};
+    long long m_gN = 0;               //!< samples pushed
+    int    m_gSyms = 0;               //!< symbols since loop (re)start (gear shifting)
+    double m_gDc = 0.0, m_gPow = 0.0; //!< loop-local DC and power estimates
+    int    m_gAcqN = 0;               //!< acquisition samples collected
+    double m_gAcqDc = 0.0;
+    double m_gAcqE[20] = {};          //!< energy per sample phase
+    double m_gNext = 0.0;             //!< next strobe time (sample units)
+    double m_gPrevY = 0.0;            //!< previous strobe value
+    double m_gInt = 0.0;              //!< loop integrator (samples per symbol)
 
     static const int m_zeroCrossingCorrectionProfile2400[11];
     static const int m_zeroCrossingCorrectionProfile4800[11];

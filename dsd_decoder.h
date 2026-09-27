@@ -160,6 +160,9 @@ public:
     void run(short sample);
     short getFilteredSample() const { return m_dsdSymbol.getFilteredSample(); }
     short getSymbolSyncSample() const { return m_dsdSymbol.getSymbolSyncSample(); }
+    //! Symbol clock: Gardner loop (default, 4800 baud) or the legacy zero-crossing clock.
+    //! Not thread-safe against run(): set it before feeding samples.
+    void setTimingRecovery(DSDSymbol::TimingRecovery mode) { m_dsdSymbol.setTimingRecovery(mode); }
 
     /** DVSI support */
 

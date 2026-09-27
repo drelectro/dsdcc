@@ -17,6 +17,8 @@
 #include <iostream>
 #include <stdlib.h>
 #include <assert.h>
+#include <cmath>
+#include <algorithm>
 
 #include "dsd_symbol.h"
 #include "dsd_decoder.h"
@@ -123,6 +125,12 @@ bool DSDSymbol::pushSample(short sample)
     }
 
     m_filteredSample = sample;
+
+    // 4800 baud streams (P25, DMR, YSF, NXDN96, D-Star) use the Gardner loop.
+    // 2400 baud stays on the zero-crossing clock: dPMR regressed under the
+    // loop (voice superframes 22 -> 9 on samples/dpmr.dis); 9600 is untested.
+    if (m_timingRecovery == TimingGardner && m_samplesPerSymbol == 10 && !m_noSignal)
+        return pushSampleGardner(sample);
 
     if (!m_noSignal)
     {
@@ -323,6 +331,133 @@ bool DSDSymbol::pushSample(short sample)
     }
 }
 
+/**
+ * Gardner timing recovery with an interpolated strobe (XMC fork).
+ *
+ * The zero-crossing clock above samples a fixed integer index nudged by a
+ * heuristic correction table; off-air it leaves symbols with 1.5-2.5x the
+ * spread the same filtered stream shows at the best timing phase (417.45 MHz
+ * P25: sigma/spacing 0.237 vs 0.162; 419.21 MHz: 0.108 vs 0.042). At 16 dB
+ * that is ~3% inner-symbol errors, beyond the TSBK trellis: 70-80% of TSBKs
+ * failed CRC. This loop strobes at a fractional time (linear interpolation),
+ * steers it with the Gardner error y[k-1/2]*(y[k]-y[k-1]) and hands the same
+ * symbol value to the unchanged slicer/min-max machinery.
+ *
+ *  - cold start / lost strobe: 48 symbols of per-phase energy pick the eye
+ *    centre first (Gardner's error also vanishes at the half-symbol point, so
+ *    an unlucky start creeps and cost the first CSBK on strong DMR captures);
+ *  - loop-local DC/power normalisation, because DSDcc's min/max levels take
+ *    100+ symbols to settle - exactly the pull-in window;
+ *  - gear shifting: 4x gain for 100 symbols, 2x to 300, then nominal.
+ */
+bool DSDSymbol::pushSampleGardner(short sample)
+{
+    m_lmmSamples.update(sample);
+    const int kHist = kGardnerHist;
+    m_gHist[m_gN % kHist] = sample;
+    m_gN++;
+
+    const double sps = m_samplesPerSymbol;
+    const bool acquiring = m_gAcqN < kAcqSyms * m_samplesPerSymbol;
+    if (!acquiring && (m_gNext < (double)(m_gN - kHist + 2) || m_gNext > (double)m_gN + 2.0 * sps))
+    {
+        // (re)start or lost: acquire the phase before tracking (below)
+        m_gNext = (double)m_gN - 1.0;
+        m_gSyms = 0;
+        m_gAcqN = 0;
+        m_gAcqDc = sample;
+        std::fill(std::begin(m_gAcqE), std::end(m_gAcqE), 0.0);
+    }
+
+    // Phase acquisition: per-phase energy, then start at the most open eye.
+    const int spsI = m_samplesPerSymbol;
+    if (acquiring)
+    {
+        m_gAcqDc += 0.01 * (sample - m_gAcqDc);
+        const double d = sample - m_gAcqDc;
+        m_gAcqE[m_gAcqN % spsI] += d * d;
+        if (++m_gAcqN == kAcqSyms * spsI)
+        {
+            int best = 0;
+            for (int k = 1; k < spsI; k++)
+                if (m_gAcqE[k] > m_gAcqE[best]) best = k;
+            // sample index (m_gN - 1) has phase (m_gAcqN - 1) % sps
+            const long long last = m_gN - 1;
+            const int lastPh = (m_gAcqN - 1) % spsI;
+            m_gNext = (double)(last + ((best - lastPh + spsI) % spsI));
+            if (m_gNext <= (double)last) m_gNext += spsI;
+            m_gPrevY = 0.0;
+        }
+        m_symbolSyncSample = m_min;
+        return false;
+    }
+
+    const long long i0 = (long long)std::floor(m_gNext);
+    m_symbolSyncSample = m_min;
+    if (i0 + 1 >= m_gN)
+        return false;                   // strobe not reached yet
+
+    auto at = [&](double t) -> double {
+        const long long k = (long long)std::floor(t);
+        const double f = t - (double)k;
+        const double a = m_gHist[((k % kHist) + kHist) % kHist];
+        const double b = m_gHist[(((k + 1) % kHist) + kHist) % kHist];
+        return a + f * (b - a);
+    };
+    const double y  = at(m_gNext);
+    const double ym = at(m_gNext - 0.5 * sps);
+    // Loop-local DC / power estimates (see header comment).
+    if (m_gSyms == 0) { m_gDc = y; m_gPow = 0.0; }
+    const double aEst = m_gSyms < 50 ? 0.1 : 0.02;
+    m_gDc  += aEst * (y - m_gDc);
+    m_gPow += aEst * ((y - m_gDc) * (y - m_gDc) - m_gPow);
+    // 4-level {+-1,+-3}: mean square 5u^2 vs outer^2 9u^2 - the gains were
+    // tuned against outer-amplitude^2 normalisation, hence the 1.8.
+    const double norm = std::max(1.0, 1.8 * m_gPow);
+    double e = (ym - m_gDc) * (y - m_gPrevY) / norm;
+    e = std::max(-1.0, std::min(1.0, e));
+    const double gear = m_gSyms < 100 ? 4.0 : m_gSyms < 300 ? 2.0 : 1.0;
+    m_gSyms++;
+    m_gInt += gear * kGardnerKi * e;
+    m_gInt = std::max(-0.05 * sps, std::min(0.05 * sps, m_gInt));
+    double adj = gear * kGardnerKp * e * sps + m_gInt;
+    adj = std::max(-0.25 * sps, std::min(0.25 * sps, adj));
+    m_gPrevY = y;
+    m_gNext += sps - adj;
+
+    m_symbolSyncSample = m_max;
+    m_symbol = (int)std::lround(y);
+    m_dsdDecoder->m_state.symbolcnt++;
+    digitizeIntoBinaryBuffer();
+    if (e > 0.0) m_numflips++;
+
+    if (m_symbolSyncQualityCounter < 99)
+        m_symbolSyncQualityCounter++;
+    else {
+        m_symbolSyncQuality = m_numflips;
+        m_symbolSyncQualityCounter = 0;
+        m_numflips = 0;
+    }
+    if (m_lmmidx < 24)
+        m_lmmidx++;
+    else {
+        m_lmmidx = 0;
+        snapMinMax();
+    }
+    return true;
+}
+
+void DSDSymbol::resetGardner()
+{
+    m_gAcqN = 0;
+    m_gAcqDc = 0.0;
+    std::fill(std::begin(m_gAcqE), std::end(m_gAcqE), 0.0);
+    m_gSyms = 0;
+    m_gNext = (double)m_gN;
+    m_gPrevY = 0.0;
+    m_gInt = 0.0;
+}
+
 void DSDSymbol::snapLevels(int nbSymbols)
 {
     memcpy(m_lbuf2, &m_lbuf[32 + m_lmmidx - nbSymbols], nbSymbols * sizeof(int)); // copy to working buffer
@@ -370,6 +505,7 @@ void DSDSymbol::setFSK(unsigned int nbSymbols, bool inverted)
 void DSDSymbol::setSamplesPerSymbol(int samplesPerSymbol)
 {
     m_samplesPerSymbol = samplesPerSymbol;
+    resetGardner();
 
     if (m_samplesPerSymbol == 5)
     {
