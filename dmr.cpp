@@ -30,6 +30,8 @@
 namespace DSDcc
 {
 
+static std::uint64_t nowMsSteady(); // defined with the CSBK helpers below
+
 const int DSDDMR::m_cachInterleave[24]   = {0, 7, 8, 9, 1, 10, 11, 12, 2, 13, 14, 15, 3, 16, 4, 17, 18, 19, 5, 20, 21, 22, 6, 23};
 const int DSDDMR::m_embSigInterleave[128] = {
         0,  16,  32,  48,  64,  80,  96, 112,
@@ -338,6 +340,7 @@ void DSDDMR::processVoice()
         if (m_slot == DSDDMRSlot1)
         {
             m_voice1FrameCount++;
+            noteVoiceBurst(0);
 
             if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
             {
@@ -371,6 +374,7 @@ void DSDDMR::processVoice()
         else if (m_slot == DSDDMRSlot2)
         {
             m_voice2FrameCount++;
+            noteVoiceBurst(1);
 
             if (m_voice2FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
             {
@@ -467,6 +471,7 @@ void DSDDMR::processVoiceMS()
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
         m_voice1FrameCount++;
+        noteVoiceBurst(0);
 //    DSD_LOG("DSDDMR::processVoiceMS: " << m_symbolIndex << " : " << m_voice1FrameCount);
 
         if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
@@ -670,7 +675,38 @@ void DSDDMR::processDataDibit(unsigned char dibit)
                     case DSDDMRDataMBCContinuation:
                         decodeMBCContinuation(infoBits);
                         break;
+                    case DSDDMRDataVoiceLCHeader:
+                        decodeFullLC(infoBits, false);
+                        break;
+                    case DSDDMRDataTerminatorWithLC:
+                        decodeFullLC(infoBits, true);
+                        break;
+                    case DSDDMRDataPIHeader:
+                        decodePIHeader(infoBits);
+                        break;
+                    /*
+                    case DSDDMRDataDataHeader:
+                    case DSDDMRDataRate_1_2_Data:
+                    case DSDDMRDataRate_3_4_Data:
+                    case DSDDMRDataRate_1:
+                    case DSDDMRDataUnifiedSingleBlock:
+                        // Recognised but not decoded (packet data); no log spam.
+                        // Rate 3/4 and rate 1 payloads are not BPTC coded at all —
+                        // landing here means the BPTC decode passed by chance.
+                        break;
+                    */
+					case DSDDMRDataIdle:
+						noteFrameResult(true);
+						break;
                     default:
+                        // BPTC-only types (no further CRC checked here) still count
+                        // as OK frames for the BLER; rate 3/4 and rate 1 are not
+                        // BPTC coded, so reaching here for them is chance — no verdict.
+                        if (m_dataType == DSDDMRDataDataHeader
+                         || m_dataType == DSDDMRDataRate_1_2_Data
+                         || m_dataType == DSDDMRDataUnifiedSingleBlock)
+                            noteFrameResult(true);
+						DSD_LOG("DSDDMR::processDataDibit: unknown data type: " << (int)m_dataType);
                         break;
                 }
             }
@@ -679,7 +715,24 @@ void DSDDMR::processDataDibit(unsigned char dibit)
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
                 m_networkState.bptcFailCount++;
+                m_channelStatus.dataBptcFailCount++;
+                m_channelStatus.frameNokCount++;
             }
+            else if (m_dataType == DSDDMRDataVoiceLCHeader || m_dataType == DSDDMRDataTerminatorWithLC
+                  || m_dataType == DSDDMRDataPIHeader || m_dataType == DSDDMRDataDataHeader
+                  || m_dataType == DSDDMRDataRate_1_2_Data || m_dataType == DSDDMRDataIdle
+                  || m_dataType == DSDDMRDataUnifiedSingleBlock)
+            {
+                // BPTC-coded types outside the trunking stats (rate 3/4 and rate 1
+                // bursts are not BPTC coded — a failed decode there means nothing).
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_channelStatus.dataBptcFailCount++;
+                m_channelStatus.frameNokCount++;
+            }
+            else {
+				DSD_LOG("DSDDMR::processDataDibit: Non-BPTC data type: " << (int)m_dataType);
+            }
+
         }
         return;
     }
@@ -861,7 +914,7 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
                     if (processVoiceEmbeddedSignalling(m_voice1EmbSig_dibitsIndex, m_voice1EmbSigRawBits, m_voice1EmbSig_OK, m_slot1Addresses))
                     {
                         textVoiceEmbeddedSignalling(m_slot1Addresses, m_dsdDecoder->m_state.slot0light);
-//                        DSD_LOG("DSDDMR::processVoiceDibit: source: " << m_slot1Addresses.m_source << " target: " << m_slot1Addresses.m_target << " group: " << m_slot1Addresses.m_group);
+                        noteEmbeddedLC(0, m_slot1Addresses);
                     }
                 }
             }
@@ -872,7 +925,7 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
                     if (processVoiceEmbeddedSignalling(m_voice2EmbSig_dibitsIndex, m_voice2EmbSigRawBits, m_voice2EmbSig_OK, m_slot2Addresses))
                     {
                         textVoiceEmbeddedSignalling(m_slot2Addresses, m_dsdDecoder->m_state.slot1light);
-//                        DSD_LOG("DSDDMR::processVoiceDibit: source: " << m_slot2Addresses.m_source << " target: " << m_slot2Addresses.m_target << " group: " << m_slot2Addresses.m_group);
+                        noteEmbeddedLC(1, m_slot2Addresses);
                     }
                 }
             }
@@ -1010,6 +1063,11 @@ void DSDDMR::decodeCACH(unsigned char *cachBits)
         {
             m_slot = DSDDMRSlotUndefined;
             m_cachOK = false;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_channelStatus.cachFailCount++;
+                m_channelStatus.frameNokCount++;
+            }
 //            DSD_LOG("DSDDMR::decodeCACH: KO: at: " << m_cachSymbolIndex);
         }
     }
@@ -1032,6 +1090,13 @@ void DSDDMR::processSlotTypePDU()
 
         unsigned int dataType = (slotTypeBits[4] << 3) + (slotTypeBits[5] << 2) + (slotTypeBits[6] << 1) + slotTypeBits[7];
 
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_channelStatus.colorCode = m_colorCode;
+            m_channelStatus.colorCodeValid = true;
+            m_channelStatus.lastBurstMs = nowMsSteady();
+        }
+
         if (dataType >= DMR_TYPES_COUNT)
         {
             m_dataType = DSDDMRDataReserved;
@@ -1048,6 +1113,11 @@ void DSDDMR::processSlotTypePDU()
     else
     {
         memcpy(&m_slotText[1], "-- UNK", 6);
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_channelStatus.slotTypeFailCount++;
+            m_channelStatus.frameNokCount++;
+        }
         if (m_verbosity > 1) DSD_LOG("DSDDMR::processSlotTypePDU KO");
     }
 }
@@ -1068,10 +1138,20 @@ bool DSDDMR::processEMB()
         sprintf(&m_slotText[1], "%02d", m_colorCode);
         m_slotText[3] = ' ';
         m_lcss = (embBits[5] << 1) + embBits[6];
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_channelStatus.colorCode = m_colorCode;
+            m_channelStatus.colorCodeValid = true;
+            m_channelStatus.lastBurstMs = nowMsSteady();
+            m_channelStatus.frameOkCount++;   // voice burst judged clean by its EMB check
+        }
         return true;
     }
     else
     {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus.embFailCount++;
+        m_channelStatus.frameNokCount++;
         return false;
     }
 }
@@ -1109,6 +1189,10 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
                 if (parityCheck != 0)
                 {
                     voiceEmbSig_OK = false;
+                    {
+                        std::lock_guard<std::mutex> lock(m_stateMutex);
+                        m_channelStatus.slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
+                    }
                     break;
                 }
             }
@@ -1184,6 +1268,10 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
             {
                 DSD_LOG("DSDDMR::processVoiceEmbeddedSignalling: decode error");
                 voiceEmbSig_OK = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_stateMutex);
+                    m_channelStatus.slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
+                }
             }
         }
     }
@@ -1470,6 +1558,99 @@ static bool csbkCRCOK(const unsigned char *infoBits, uint16_t mask, int verbosit
     }
 
     return computed == received;
+}
+
+// ========================================================================================
+// Reed-Solomon (12,9) over GF(256) for FULL LC headers (TS 102 361-1 §B.3.6)
+// Adapted from MMDVMHost RS129.cpp (Jonathan Naylor G4KLX, GPL) — check only, no
+// correction: a corrupted header is recovered from the embedded LC repeats instead.
+// ========================================================================================
+
+static const unsigned char rs129ExpTable[] = {
+    0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1D, 0x3A, 0x74, 0xE8, 0xCD, 0x87, 0x13, 0x26,
+    0x4C, 0x98, 0x2D, 0x5A, 0xB4, 0x75, 0xEA, 0xC9, 0x8F, 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0,
+    0x9D, 0x27, 0x4E, 0x9C, 0x25, 0x4A, 0x94, 0x35, 0x6A, 0xD4, 0xB5, 0x77, 0xEE, 0xC1, 0x9F, 0x23,
+    0x46, 0x8C, 0x05, 0x0A, 0x14, 0x28, 0x50, 0xA0, 0x5D, 0xBA, 0x69, 0xD2, 0xB9, 0x6F, 0xDE, 0xA1,
+    0x5F, 0xBE, 0x61, 0xC2, 0x99, 0x2F, 0x5E, 0xBC, 0x65, 0xCA, 0x89, 0x0F, 0x1E, 0x3C, 0x78, 0xF0,
+    0xFD, 0xE7, 0xD3, 0xBB, 0x6B, 0xD6, 0xB1, 0x7F, 0xFE, 0xE1, 0xDF, 0xA3, 0x5B, 0xB6, 0x71, 0xE2,
+    0xD9, 0xAF, 0x43, 0x86, 0x11, 0x22, 0x44, 0x88, 0x0D, 0x1A, 0x34, 0x68, 0xD0, 0xBD, 0x67, 0xCE,
+    0x81, 0x1F, 0x3E, 0x7C, 0xF8, 0xED, 0xC7, 0x93, 0x3B, 0x76, 0xEC, 0xC5, 0x97, 0x33, 0x66, 0xCC,
+    0x85, 0x17, 0x2E, 0x5C, 0xB8, 0x6D, 0xDA, 0xA9, 0x4F, 0x9E, 0x21, 0x42, 0x84, 0x15, 0x2A, 0x54,
+    0xA8, 0x4D, 0x9A, 0x29, 0x52, 0xA4, 0x55, 0xAA, 0x49, 0x92, 0x39, 0x72, 0xE4, 0xD5, 0xB7, 0x73,
+    0xE6, 0xD1, 0xBF, 0x63, 0xC6, 0x91, 0x3F, 0x7E, 0xFC, 0xE5, 0xD7, 0xB3, 0x7B, 0xF6, 0xF1, 0xFF,
+    0xE3, 0xDB, 0xAB, 0x4B, 0x96, 0x31, 0x62, 0xC4, 0x95, 0x37, 0x6E, 0xDC, 0xA5, 0x57, 0xAE, 0x41,
+    0x82, 0x19, 0x32, 0x64, 0xC8, 0x8D, 0x07, 0x0E, 0x1C, 0x38, 0x70, 0xE0, 0xDD, 0xA7, 0x53, 0xA6,
+    0x51, 0xA2, 0x59, 0xB2, 0x79, 0xF2, 0xF9, 0xEF, 0xC3, 0x9B, 0x2B, 0x56, 0xAC, 0x45, 0x8A, 0x09,
+    0x12, 0x24, 0x48, 0x90, 0x3D, 0x7A, 0xF4, 0xF5, 0xF7, 0xF3, 0xFB, 0xEB, 0xCB, 0x8B, 0x0B, 0x16,
+    0x2C, 0x58, 0xB0, 0x7D, 0xFA, 0xE9, 0xCF, 0x83, 0x1B, 0x36, 0x6C, 0xD8, 0xAD, 0x47, 0x8E, 0x01,
+    0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1D, 0x3A, 0x74, 0xE8, 0xCD, 0x87, 0x13, 0x26, 0x4C,
+    0x98, 0x2D, 0x5A, 0xB4, 0x75, 0xEA, 0xC9, 0x8F, 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x9D,
+    0x27, 0x4E, 0x9C, 0x25, 0x4A, 0x94, 0x35, 0x6A, 0xD4, 0xB5, 0x77, 0xEE, 0xC1, 0x9F, 0x23, 0x46,
+    0x8C, 0x05, 0x0A, 0x14, 0x28, 0x50, 0xA0, 0x5D, 0xBA, 0x69, 0xD2, 0xB9, 0x6F, 0xDE, 0xA1, 0x5F,
+    0xBE, 0x61, 0xC2, 0x99, 0x2F, 0x5E, 0xBC, 0x65, 0xCA, 0x89, 0x0F, 0x1E, 0x3C, 0x78, 0xF0, 0xFD,
+    0xE7, 0xD3, 0xBB, 0x6B, 0xD6, 0xB1, 0x7F, 0xFE, 0xE1, 0xDF, 0xA3, 0x5B, 0xB6, 0x71, 0xE2, 0xD9,
+    0xAF, 0x43, 0x86, 0x11, 0x22, 0x44, 0x88, 0x0D, 0x1A, 0x34, 0x68, 0xD0, 0xBD, 0x67, 0xCE, 0x81,
+    0x1F, 0x3E, 0x7C, 0xF8, 0xED, 0xC7, 0x93, 0x3B, 0x76, 0xEC, 0xC5, 0x97, 0x33, 0x66, 0xCC, 0x85,
+    0x17, 0x2E, 0x5C, 0xB8, 0x6D, 0xDA, 0xA9, 0x4F, 0x9E, 0x21, 0x42, 0x84, 0x15, 0x2A, 0x54, 0xA8,
+    0x4D, 0x9A, 0x29, 0x52, 0xA4, 0x55, 0xAA, 0x49, 0x92, 0x39, 0x72, 0xE4, 0xD5, 0xB7, 0x73, 0xE6,
+    0xD1, 0xBF, 0x63, 0xC6, 0x91, 0x3F, 0x7E, 0xFC, 0xE5, 0xD7, 0xB3, 0x7B, 0xF6, 0xF1, 0xFF, 0xE3,
+    0xDB, 0xAB, 0x4B, 0x96, 0x31, 0x62, 0xC4, 0x95, 0x37, 0x6E, 0xDC, 0xA5, 0x57, 0xAE, 0x41, 0x82,
+    0x19, 0x32, 0x64, 0xC8, 0x8D, 0x07, 0x0E, 0x1C, 0x38, 0x70, 0xE0, 0xDD, 0xA7, 0x53, 0xA6, 0x51,
+    0xA2, 0x59, 0xB2, 0x79, 0xF2, 0xF9, 0xEF, 0xC3, 0x9B, 0x2B, 0x56, 0xAC, 0x45, 0x8A, 0x09, 0x12,
+    0x24, 0x48, 0x90, 0x3D, 0x7A, 0xF4, 0xF5, 0xF7, 0xF3, 0xFB, 0xEB, 0xCB, 0x8B, 0x0B, 0x16, 0x2C,
+    0x58, 0xB0, 0x7D, 0xFA, 0xE9, 0xCF, 0x83, 0x1B, 0x36, 0x6C, 0xD8, 0xAD, 0x47, 0x8E, 0x01, 0x00};
+
+static const unsigned char rs129LogTable[] = {
+    0x00, 0x00, 0x01, 0x19, 0x02, 0x32, 0x1A, 0xC6, 0x03, 0xDF, 0x33, 0xEE, 0x1B, 0x68, 0xC7, 0x4B,
+    0x04, 0x64, 0xE0, 0x0E, 0x34, 0x8D, 0xEF, 0x81, 0x1C, 0xC1, 0x69, 0xF8, 0xC8, 0x08, 0x4C, 0x71,
+    0x05, 0x8A, 0x65, 0x2F, 0xE1, 0x24, 0x0F, 0x21, 0x35, 0x93, 0x8E, 0xDA, 0xF0, 0x12, 0x82, 0x45,
+    0x1D, 0xB5, 0xC2, 0x7D, 0x6A, 0x27, 0xF9, 0xB9, 0xC9, 0x9A, 0x09, 0x78, 0x4D, 0xE4, 0x72, 0xA6,
+    0x06, 0xBF, 0x8B, 0x62, 0x66, 0xDD, 0x30, 0xFD, 0xE2, 0x98, 0x25, 0xB3, 0x10, 0x91, 0x22, 0x88,
+    0x36, 0xD0, 0x94, 0xCE, 0x8F, 0x96, 0xDB, 0xBD, 0xF1, 0xD2, 0x13, 0x5C, 0x83, 0x38, 0x46, 0x40,
+    0x1E, 0x42, 0xB6, 0xA3, 0xC3, 0x48, 0x7E, 0x6E, 0x6B, 0x3A, 0x28, 0x54, 0xFA, 0x85, 0xBA, 0x3D,
+    0xCA, 0x5E, 0x9B, 0x9F, 0x0A, 0x15, 0x79, 0x2B, 0x4E, 0xD4, 0xE5, 0xAC, 0x73, 0xF3, 0xA7, 0x57,
+    0x07, 0x70, 0xC0, 0xF7, 0x8C, 0x80, 0x63, 0x0D, 0x67, 0x4A, 0xDE, 0xED, 0x31, 0xC5, 0xFE, 0x18,
+    0xE3, 0xA5, 0x99, 0x77, 0x26, 0xB8, 0xB4, 0x7C, 0x11, 0x44, 0x92, 0xD9, 0x23, 0x20, 0x89, 0x2E,
+    0x37, 0x3F, 0xD1, 0x5B, 0x95, 0xBC, 0xCF, 0xCD, 0x90, 0x87, 0x97, 0xB2, 0xDC, 0xFC, 0xBE, 0x61,
+    0xF2, 0x56, 0xD3, 0xAB, 0x14, 0x2A, 0x5D, 0x9E, 0x84, 0x3C, 0x39, 0x53, 0x47, 0x6D, 0x41, 0xA2,
+    0x1F, 0x2D, 0x43, 0xD8, 0xB7, 0x7B, 0xA4, 0x76, 0xC4, 0x17, 0x49, 0xEC, 0x7F, 0x0C, 0x6F, 0xF6,
+    0x6C, 0xA1, 0x3B, 0x52, 0x29, 0x9D, 0x55, 0xAA, 0xFB, 0x60, 0x86, 0xB1, 0xBB, 0xCC, 0x3E, 0x5A,
+    0xCB, 0x59, 0x5F, 0xB0, 0x9C, 0xA9, 0xA0, 0x51, 0x0B, 0xF5, 0x16, 0xEB, 0x7A, 0x75, 0x2C, 0xD7,
+    0x4F, 0xAE, 0xD5, 0xE9, 0xE6, 0xE7, 0xAD, 0xE8, 0x74, 0xD6, 0xF4, 0xEA, 0xA8, 0x50, 0x58, 0xAF};
+
+static unsigned char rs129Gmult(unsigned char a, unsigned char b)
+{
+    if (a == 0 || b == 0)
+        return 0;
+    return rs129ExpTable[(unsigned int)rs129LogTable[a] + (unsigned int)rs129LogTable[b]];
+}
+
+// LFSR encode with generator polynomial {64, 56, 14, 1}; deposits 3 parity bytes.
+static void rs129Encode(const unsigned char *msg, unsigned int nbytes, unsigned char *parity)
+{
+    static const unsigned char poly[3] = {64, 56, 14};
+
+    parity[0] = parity[1] = parity[2] = 0;
+
+    for (unsigned int i = 0; i < nbytes; i++)
+    {
+        unsigned char dbyte = msg[i] ^ parity[2];
+        parity[2] = parity[1] ^ rs129Gmult(poly[2], dbyte);
+        parity[1] = parity[0] ^ rs129Gmult(poly[1], dbyte);
+        parity[0] = rs129Gmult(poly[0], dbyte);
+    }
+}
+
+// FULL LC check: 9 data bytes + 3 parity bytes, parity masked per data type
+// (TS 102 361-1 §B.3.6: Voice LC header 0x969696, Terminator with LC 0x999999).
+static bool fullLCCrcOK(const unsigned char *lcBytes, unsigned char mask)
+{
+    unsigned char parity[3];
+    rs129Encode(lcBytes, 9, parity);
+
+    return ((unsigned char)(lcBytes[9]  ^ mask) == parity[2])
+        && ((unsigned char)(lcBytes[10] ^ mask) == parity[1])
+        && ((unsigned char)(lcBytes[11] ^ mask) == parity[0]);
 }
 
 static unsigned int bitsToUint(const unsigned char *bits, int nbBits)
@@ -2178,6 +2359,8 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
         m_networkState.csbkTotalCount++;
         if (crcOK) m_networkState.csbkCrcOkCount++;
         else       m_networkState.csbkCrcFailCount++;
+        if (crcOK) m_channelStatus.frameOkCount++;
+        else       m_channelStatus.frameNokCount++;
         // A recognised manufacturer FID on a clean frame identifies the vendor.
         if (crcOK && mfid != 0x00 && fidVendorName(mfid))
             m_networkState.vendorFid = mfid;
@@ -2210,6 +2393,280 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
     memcpy(&m_slotText[8], opBuf, 11);
 }
 
+// ========================================================================================
+// FULL LC: Voice LC header / Terminator with LC (TS 102 361-1 §9.1.4/9.1.5,
+// LC content TS 102 361-2 §7.1) and per-slot Tier I/II call tracking
+// ========================================================================================
+
+static const char *flcoName(unsigned char flco)
+{
+    switch (flco)
+    {
+        case 0x00: return "Group Voice  ";
+        case 0x03: return "Private Voice";
+        case 0x04: return "TalkerAliasH ";
+        case 0x05: return "TalkerAlias1 ";
+        case 0x06: return "TalkerAlias2 ";
+        case 0x07: return "TalkerAlias3 ";
+        case 0x08: return "GPS Info     ";
+        default:   return nullptr;
+    }
+}
+
+void DSDDMR::decodeFullLC(const unsigned char *infoBits, bool terminator)
+{
+    unsigned char bytes[12] = {0};
+    for (int i = 0; i < 96; i++)
+        bytes[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+
+    const bool crcOK = fullLCCrcOK(bytes, terminator ? 0x99 : 0x96);
+    const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
+
+    const unsigned char pf   = infoBits[0];            //!< protect flag: LC is encrypted
+    const unsigned char flco = (unsigned char) bitsToUint(&infoBits[2], 6);
+    const unsigned char fid  = bytes[1];
+    const unsigned char svc  = bytes[2];               //!< service options (voice LCs)
+    const unsigned int  dst  = bitsToUint(&infoBits[24], 24);
+    unsigned int        src  = bitsToUint(&infoBits[48], 24);
+
+    const bool emergency = (svc & 0x80) != 0;
+    const bool privacy   = (svc & 0x40) != 0;
+    const bool broadcast = (svc & 0x08) != 0;
+    const bool ovcm      = (svc & 0x04) != 0;
+    const unsigned char priority = svc & 0x03;
+
+    // Motorola Capacity Plus Group Voice Channel User: FLCO 0x04 with FID 0x10.
+    // The source field is split: byte 6 is the rest-channel LSN, bytes 7-8 the
+    // 16-bit radio ID. Verified off-air 2026-09-21 against a Cap+ voice channel
+    // (radio/rest-LSN match the embedded LC and the rest channel rotation).
+    const bool capPlusGrp = (flco == 0x04 && fid == 0x10);
+    const unsigned char capPlusRestLsn = capPlusGrp ? bytes[6] : 0;
+    if (capPlusGrp)
+        src = bitsToUint(&infoBits[56], 16);
+
+    const bool isVoiceLC = (flco == 0x00 || flco == 0x03 || capPlusGrp);
+    const bool isGroup   = (flco != 0x03);
+
+    const std::uint64_t nowMs = nowMsSteady();
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+
+        if (terminator) { if (crcOK) sc.tlcOkCount++; else sc.tlcFailCount++; }
+        else            { if (crcOK) sc.vlcOkCount++; else sc.vlcFailCount++; }
+        if (crcOK) m_channelStatus.frameOkCount++;
+        else       m_channelStatus.frameNokCount++;
+        m_channelStatus.lastBurstMs = nowMs;
+
+        if (crcOK && isVoiceLC)
+        {
+            if (!terminator)
+            {
+                // A repeated header for the running call refreshes it; anything
+                // else (different parties, or a stale leftover) starts a new call.
+                const bool stale = sc.active && (nowMs - sc.lastSeenMs > 2000);
+                if (!sc.active || stale || sc.srcAddr != src || sc.dstAddr != dst)
+                {
+                    sc.active = true;
+                    sc.startMs = nowMs;
+                    sc.voiceBursts = 0;
+                    sc.endMs = 0;
+                    sc.totalCalls++;
+                }
+                sc.lcSource = 1;
+            }
+            else
+            {
+                if (sc.startMs == 0)
+                    sc.startMs = nowMs;   // tuned in at the tail: no duration known
+                sc.lcSource = 3;
+                sc.endMs = nowMs;
+                sc.active = false;
+            }
+            sc.addressesValid = true;
+            sc.isGroup   = isGroup;
+            sc.srcAddr   = src;
+            sc.dstAddr   = dst;
+            sc.flco      = flco;
+            sc.fid       = fid;
+            sc.emergency = emergency;
+            sc.privacy   = privacy;
+            sc.broadcast = broadcast;
+            sc.ovcm      = ovcm;
+            sc.priority  = priority;
+            sc.lastSeenMs = nowMs;
+        }
+    }
+
+    std::ostringstream msg;
+    msg << (terminator ? "TLC[" : "VLC[") << (slotIdx + 1) << "] ";
+    const char *fn = capPlusGrp ? "Cap+ GrpVoice" : flcoName(flco);
+    if (fn) msg << fn;
+    else    msg << "FLCO=0x" << std::hex << std::setw(2) << std::setfill('0') << (int)flco << std::dec;
+    if (terminator) msg << " (call end)";
+    if (capPlusGrp) msg << " RestLSN=" << (int)capPlusRestLsn;
+    msg << " Src=";
+    appendAddr(msg, src);
+    msg << " Dst=";
+    if (isGroup && !gatewayName(dst) && dst < 0xFFFE00) msg << "TG ";
+    appendAddr(msg, dst);
+    if (fid != 0x00)
+    {
+        const char *vendor = fidVendorName(fid);
+        msg << " FID=";
+        if (vendor) msg << vendor;
+        else msg << "0x" << std::hex << std::setw(2) << std::setfill('0') << (int)fid << std::dec;
+    }
+    if (isVoiceLC)
+    {
+        if (emergency) msg << " EMERGENCY";
+        if (privacy)   msg << " Encrypted";
+        if (broadcast) msg << " Broadcast";
+        if (ovcm)      msg << " OVCM";
+        if (priority)  msg << " Pri=" << (int)priority;
+    }
+    if (pf) msg << " PF";
+    if (!crcOK) msg << " CRC-FAIL";
+
+    // Pseudo-opcodes 0x80/0x81 keep VLC/TLC dedup state separate from real CSBKOs.
+    const std::string logLine = msg.str();
+    if (shouldLogCSBK(terminator ? 0x81 : 0x80, fid, crcOK, logLine)) DSD_LOG(logLine);
+
+    // A clean voice LC gives the call parties before the first embedded-LC
+    // superframe completes — seed the slot text and address cache from it.
+    if (crcOK && isVoiceLC && !terminator)
+    {
+        DMRAddresses& addr = (slotIdx == 0) ? m_slot1Addresses : m_slot2Addresses;
+        addr.m_group  = isGroup;
+        addr.m_target = dst;
+        addr.m_source = src;
+        textVoiceEmbeddedSignalling(addr, m_slotText);
+    }
+}
+
+void DSDDMR::decodePIHeader(const unsigned char *infoBits)
+{
+    // CRC-CCITT-16 with the PI header mask (TS 102 361-1 §B.3.12)
+    const bool crcOK = csbkCRCOK(infoBits, 0x6969, 0 /* quiet: mask is known-good */);
+    const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus.piHeaderCount++;
+        m_channelStatus.lastBurstMs = nowMsSteady();
+        if (crcOK) m_channelStatus.frameOkCount++;
+        else       m_channelStatus.frameNokCount++;
+        if (crcOK)
+        {
+            // A PI header announces an encrypted call on this slot.
+            m_channelStatus.slot[slotIdx].privacy = true;
+        }
+    }
+
+    // Log-only for now: the algorithm/key layout is left as a raw dump until
+    // verified against a live capture.
+    std::ostringstream msg;
+    msg << "PIH[" << (slotIdx + 1) << "] encrypted call setup"
+        << " AlgID=0x" << std::hex << std::setw(2) << std::setfill('0')
+        << (int)bitsToUint(&infoBits[0], 8) << std::dec;
+    if (m_verbosity >= 2)
+    {
+        unsigned char raw[10] = {0};
+        for (int i = 0; i < 80; i++) raw[i / 8] |= (infoBits[i] << (7 - (i % 8)));
+        msg << " Data=" << std::hex << std::setfill('0');
+        for (int i = 0; i < 10; i++) msg << std::setw(2) << (int)raw[i];
+        msg << std::dec;
+    }
+    if (!crcOK) msg << " CRC-FAIL";
+
+    const std::string logLine = msg.str();
+    if (shouldLogCSBK(0x82, 0, crcOK, logLine)) DSD_LOG(logLine);
+}
+
+void DSDDMR::noteFrameResult(bool ok)
+{
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (ok) m_channelStatus.frameOkCount++;
+    else    m_channelStatus.frameNokCount++;
+}
+
+void DSDDMR::noteVoiceBurst(int slotIdx)
+{
+    const std::uint64_t nowMs = nowMsSteady();
+
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+
+    // Voice with no preceding header (late entry, or the previous call ended
+    // cleanly) starts a fresh call whose parties arrive with the embedded LC.
+    const bool stale = sc.active && (nowMs - sc.lastSeenMs > 2000);
+    if (!sc.active || stale)
+    {
+        sc.active = true;
+        sc.startMs = nowMs;
+        sc.voiceBursts = 0;
+        sc.endMs = 0;
+        sc.totalCalls++;
+        sc.addressesValid = false;
+        sc.lcSource = 0;
+        sc.emergency = sc.privacy = sc.broadcast = sc.ovcm = false;
+        sc.priority = 0;
+    }
+
+    sc.voiceBursts++;
+    sc.totalVoiceBursts++;
+    sc.lastSeenMs = nowMs;
+    m_channelStatus.lastBurstMs = nowMs;
+}
+
+void DSDDMR::noteEmbeddedLC(int slotIdx, const DMRAddresses& addresses)
+{
+    const std::uint64_t nowMs = nowMsSteady();
+
+    std::unique_lock<std::mutex> lock(m_stateMutex);
+    DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+
+    sc.embLcOkCount++;
+
+    if (!sc.active)
+    {
+        // Normally voice bursts have already opened the call; cover the odd ordering.
+        sc.active = true;
+        sc.startMs = nowMs;
+        sc.voiceBursts = 0;
+        sc.endMs = 0;
+        sc.totalCalls++;
+    }
+
+    sc.addressesValid = true;
+    sc.isGroup = addresses.m_group;
+    sc.srcAddr = addresses.m_source;
+    sc.dstAddr = addresses.m_target;
+    // Keep the "VLC header" provenance if we saw the header — it carries more
+    // detail (FID, service options) than the embedded form.
+    if (sc.lcSource != 1)
+        sc.lcSource = 2;
+    sc.lastSeenMs = nowMs;
+
+    lock.unlock();
+
+    std::ostringstream msg;
+    msg << "EMB[" << (slotIdx + 1) << "] "
+        << (addresses.m_group ? "Group Voice  " : "Private Voice")
+        << " Src=";
+    appendAddr(msg, addresses.m_source);
+    msg << " Dst=";
+    if (addresses.m_group && !gatewayName(addresses.m_target) && addresses.m_target < 0xFFFE00)
+        msg << "TG ";
+    appendAddr(msg, addresses.m_target);
+
+    // Repeats every embedded-LC superframe (~360 ms) during a call — dedup with
+    // the CSBK machinery (pseudo-opcode 0x83) so only changes/heartbeats log.
+    const std::string logLine = msg.str();
+    if (shouldLogCSBK(0x83, 0, true, logLine)) DSD_LOG(logLine);
+}
+
 void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
 {
     unsigned char csbko = (unsigned char) bitsToUint(&infoBits[2], 6);
@@ -2221,6 +2678,8 @@ void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
         m_networkState.csbkTotalCount++;
         if (crcOK) m_networkState.csbkCrcOkCount++;
         else       m_networkState.csbkCrcFailCount++;
+        if (crcOK) m_channelStatus.frameOkCount++;
+        else       m_channelStatus.frameNokCount++;
     }
 
     unsigned int dst = bitsToUint(&infoBits[32], 24);
@@ -2272,6 +2731,9 @@ void DSDDMR::decodeMBCContinuation(const unsigned char *infoBits)
 {
     const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
     MBCAssembly& asmb = m_mbcAssembly[slotIdx];
+
+    // BPTC verified; the multi-block CRC is judged at assembly, not per burst.
+    noteFrameResult(true);
 
     // Bring-up aid: raw 96-bit dump of every continuation block in arrival order
     if (m_verbosity >= 3)

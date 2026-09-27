@@ -168,6 +168,75 @@ public:
         return m_networkState;
     }
 
+    // Snapshot of Tier I/II channel activity — per-slot call state decoded from
+    // Voice LC headers, embedded LC and terminators, plus burst/error counters.
+    // Guarded by the same mutex as DMRNetworkState; copy via getChannelStatusCopy().
+    struct DMRChannelStatus
+    {
+        struct SlotCall
+        {
+            // Current (or most recent) call on this slot
+            bool     active = false;         //!< voice/LC seen and no terminator yet; UI treats >2 s silence as lost
+            bool     addressesValid = false; //!< src/dst decoded from an LC (not just voice sync)
+            bool     isGroup = true;
+            uint32_t srcAddr = 0;
+            uint32_t dstAddr = 0;
+            uint8_t  flco = 0;               //!< 0x00 Grp_V_Ch_Usr, 0x03 UU_V_Ch_Usr
+            uint8_t  fid = 0;                //!< feature set ID from the LC
+            bool     emergency = false;      //!< service options (voice LC only)
+            bool     privacy = false;
+            bool     broadcast = false;
+            bool     ovcm = false;
+            uint8_t  priority = 0;
+            uint8_t  lcSource = 0;           //!< most recent LC form: 0 none, 1 VLC header, 2 embedded LC, 3 terminator
+            uint64_t startMs = 0;            //!< first event of the current call
+            uint64_t lastSeenMs = 0;         //!< last voice burst or LC of the current call
+            uint64_t endMs = 0;              //!< terminator time (0 = no clean end seen)
+            uint32_t voiceBursts = 0;        //!< 60 ms voice bursts in the current call
+
+            // Cumulative per-slot counters (survive across calls)
+            uint32_t totalCalls = 0;
+            uint32_t totalVoiceBursts = 0;
+            uint32_t vlcOkCount = 0,   vlcFailCount = 0;   //!< Voice LC header RS(12,9) results
+            uint32_t tlcOkCount = 0,   tlcFailCount = 0;   //!< Terminator-with-LC RS(12,9) results
+            uint32_t embLcOkCount = 0, embLcFailCount = 0; //!< embedded LC assemblies / fragment+FEC errors
+        };
+        SlotCall slot[2];
+
+        uint8_t  colorCode = 0;
+        bool     colorCodeValid = false;
+        uint64_t lastBurstMs = 0;            //!< last successfully framed burst of any type
+
+        // Frame verdict counters over FEC/CRC-checkable bursts: data bursts
+        // judged by the CACH → Slot Type → BPTC → payload CRC chain, voice
+        // bursts by the EMB QR check.  Rate 3/4 and rate 1 payloads carry no
+        // checkable code and stay out of both counts.
+        // BLER = frameNokCount / (frameOkCount + frameNokCount).
+        uint32_t frameOkCount = 0;
+        uint32_t frameNokCount = 0;
+
+        // Channel-wide FEC error counters
+        uint32_t cachFailCount = 0;          //!< CACH Hamming(7,4) failures
+        uint32_t slotTypeFailCount = 0;      //!< Slot Type Golay(20,8) failures
+        uint32_t embFailCount = 0;           //!< EMB QR(16,7,6) failures
+        uint32_t dataBptcFailCount = 0;      //!< BPTC(196,96) failures on data bursts
+        uint32_t piHeaderCount = 0;          //!< PI headers seen (encrypted call setup)
+    };
+
+    DMRChannelStatus getChannelStatusCopy() const
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        return m_channelStatus;
+    }
+
+    // Discard all accumulated channel status (calls, counters); safe from any
+    // thread. Used on receiver retune and by the status window's Reset button.
+    void resetChannelStatus()
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus = DMRChannelStatus();
+    }
+
     // Discard all accumulated network state (identity, learned channel plan,
     // calls, talkgroups, counters). Called from the UI thread when the control
     // receiver is retuned — the old system's data is stale. An in-flight MBC
@@ -236,6 +305,11 @@ private:
     void BasicPrivacyXOR(unsigned char *dibit, int pos);
 
     bool decodeBPTC196_96(unsigned char *infoBits);         //!< BPTC(196,96) decode of m_dataDibits → 96 info bits
+    void decodeFullLC(const unsigned char *infoBits, bool terminator); //!< Voice LC header / Terminator-with-LC (RS(12,9) FULL LC)
+    void decodePIHeader(const unsigned char *infoBits);     //!< PI header (encrypted call setup) — log + count only
+    void noteVoiceBurst(int slotIdx);                       //!< Count a completed 60 ms voice burst, maintain call activity
+    void noteFrameResult(bool ok);                          //!< Record a burst FEC/CRC verdict for the BLER counters
+    void noteEmbeddedLC(int slotIdx, const DMRAddresses& addresses); //!< Fold a decoded embedded LC into the slot call state
     void decodeCSBK(const unsigned char *infoBits);         //!< Parse CSBK PDU (ETSI TS 102 361-1 §9.1.7)
     void decodeMBCHeader(const unsigned char *infoBits);    //!< Parse MBC Header PDU, start per-slot assembly
     void decodeMBCContinuation(const unsigned char *infoBits); //!< Append MBC Continuation block, dispatch on last block
@@ -330,6 +404,7 @@ private:
     MBCAssembly m_mbcAssembly[2];
 
     DMRNetworkState m_networkState;
+    DMRChannelStatus m_channelStatus;
     mutable std::mutex m_stateMutex;
 
     int m_verbosity = 1;
