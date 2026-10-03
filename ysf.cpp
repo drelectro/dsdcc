@@ -17,8 +17,20 @@
 #include "dsd_decoder.h"
 #include "mbefec.h"
 
+#include <chrono>
+
 namespace DSDcc
 {
+
+static std::uint64_t nowMsSteady()
+{
+    return (std::uint64_t) std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// A call with no header / communication frame for this long is over even
+// without a terminator; the next frame opens a new (late-entry) call.
+static const std::uint64_t YSF_CALL_STALE_MS = 2000;
 
 const int DSDYSF::m_fichInterleave[100] = {
         0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95,
@@ -242,6 +254,8 @@ void DSDYSF::process() // just pass the frames for now
 
         if (m_symbolIndex == 100 -1)
         {
+            noteFICH();
+
             if (m_fich.getFrameInformation() == FICommunication)
             {
                 switch (m_fich.getDataType())
@@ -326,7 +340,7 @@ void DSDYSF::processFICH(int symbolIndex, unsigned char dibit)
             }
             else
             {
-                std::cerr << "DSDYSF::processFICH: Golay KO #" << i << std::endl;
+                //std::cerr << "DSDYSF::processFICH: Golay KO #" << i << std::endl;
                 m_fichError = FICHErrorGolay;
                 break;
             }
@@ -337,12 +351,12 @@ void DSDYSF::processFICH(int symbolIndex, unsigned char dibit)
             if (checkCRC16(m_fichBits, 4))
             {
                 m_fich.setBytes(m_fichBits);
-                std::cerr << "DSDYSF::processFICH: CRC OK: " << m_fich << std::endl;
+                //std::cerr << "DSDYSF::processFICH: CRC OK: " << m_fich << std::endl;
                 m_fichError = FICHNoError;
             }
             else
             {
-                std::cerr << "DSDYSF::processFICH: CRC KO" << std::endl;
+                //std::cerr << "DSDYSF::processFICH: CRC KO" << std::endl;
                 m_fichError = FICHErrorCRC;
             }
         }
@@ -402,19 +416,23 @@ void DSDYSF::processHeader(int symbolIndex, unsigned char dibit)
         if (checkCRC16(m_dch1Bits, 20, bytes)) // CSD1
         {
             processCSD1(bytes);
+            noteDCH(true);
         }
         else
         {
-            std::cerr << "DSDYSF::processHeader: DCH1 CRC KO" << std::endl;
+            //std::cerr << "DSDYSF::processHeader: DCH1 CRC KO" << std::endl;
+            noteDCH(false);
         }
 
         if (checkCRC16(m_dch2Bits, 20, bytes)) // CSD2
         {
             processCSD2(bytes);
+            noteDCH(true);
         }
         else
         {
-            std::cerr << "DSDYSF::processHeader: DCH2 CRC KO" << std::endl;
+            //std::cerr << "DSDYSF::processHeader: DCH2 CRC KO" << std::endl;
+            noteDCH(false);
         }
 
         m_vfrStart = m_fich.getFrameInformation() == FIHeader;
@@ -428,7 +446,7 @@ void DSDYSF::processCSD1(unsigned char *dchBytes)
         memcpy(m_destId, dchBytes, 5);
         m_destId[5] = '\0';
         memcpy(m_srcId, &dchBytes[5], 5);
-        m_destId[5] = '\0';
+        m_srcId[5] = '\0';
     }
     else
     {
@@ -436,7 +454,7 @@ void DSDYSF::processCSD1(unsigned char *dchBytes)
         m_dest[10] = '\0';
         memcpy(m_src, &dchBytes[10], 10);
         m_src[10] = '\0';
-        std::cerr << "DSDYSF::processCSD1: Dest: " << m_dest << " Src: " << m_src << std::endl;
+        //std::cerr << "DSDYSF::processCSD1: Dest: " << m_dest << " Src: " << m_src << std::endl;
     }
 }
 
@@ -446,7 +464,7 @@ void DSDYSF::processCSD2(unsigned char *dchBytes)
     m_downlink[10] = '\0';
     memcpy(m_uplink, &dchBytes[10], 10);
     m_uplink[10] = '\0';
-    std::cerr << "DSDYSF::processCSD2:  D/L: " << m_downlink << " U/L: " << m_uplink << std::endl;
+    //std::cerr << "DSDYSF::processCSD2:  D/L: " << m_downlink << " U/L: " << m_uplink << std::endl;
 }
 
 void DSDYSF::processCSD3_1(unsigned char *dchBytes)
@@ -455,8 +473,8 @@ void DSDYSF::processCSD3_1(unsigned char *dchBytes)
     m_rem1[5] = '\0';
     memcpy(m_rem2, &dchBytes[5], 5);
     m_rem2[5] = '\0';
-//    std::cerr << "DSDYSF::processCSD3_1: Rem1: " << m_rem1 << std::endl;
-//    std::cerr << "DSDYSF::processCSD3_1: Rem2: " << m_rem2 << std::endl;
+    //std::cerr << "DSDYSF::processCSD3_1: Rem1: " << m_rem1 << std::endl;
+    //std::cerr << "DSDYSF::processCSD3_1: Rem2: " << m_rem2 << std::endl;
 }
 
 void DSDYSF::processCSD3_2(unsigned char *dchBytes)
@@ -465,8 +483,8 @@ void DSDYSF::processCSD3_2(unsigned char *dchBytes)
     m_rem3[5] = '\0';
     memcpy(m_rem4, &dchBytes[5], 5);
     m_rem4[5] = '\0';
-    std::cerr << "DSDYSF::processCSD3_2: Rem3: " << m_rem3 << std::endl;
-    std::cerr << "DSDYSF::processCSD3_2: Rem4: " << m_rem4 << std::endl;
+    //std::cerr << "DSDYSF::processCSD3_2: Rem3: " << m_rem3 << std::endl;
+    //std::cerr << "DSDYSF::processCSD3_2: Rem4: " << m_rem4 << std::endl;
 }
 
 void DSDYSF::processVD1(int symbolIndex, unsigned char dibit)
@@ -530,6 +548,12 @@ void DSDYSF::processVD1(int symbolIndex, unsigned char dibit)
                 default:
                     break;
                 }
+
+                noteDCH(true);
+            }
+            else
+            {
+                noteDCH(false);
             }
         }
     }
@@ -590,22 +614,22 @@ void DSDYSF::processVD2(int symbolIndex, unsigned char dibit)
                 case 0:
                     memcpy(m_dest, bytes, 10);
                     m_dest[10] = '\0';
-                    std::cerr << "DSDYSF::processVD2: Dest: " << m_dest << std::endl;
+                    //std::cerr << "DSDYSF::processVD2: Dest: " << m_dest << std::endl;
                     break;
                 case 1:
                     memcpy(m_src, bytes, 10);
                     m_src[10] = '\0';
-                    std::cerr << "DSDYSF::processVD2:  Src: " << m_src << std::endl;
+                    //std::cerr << "DSDYSF::processVD2:  Src: " << m_src << std::endl;
                     break;
                 case 2:
                     memcpy(m_downlink, bytes, 10);
                     m_downlink[10] = '\0';
-                    std::cerr << "DSDYSF::processVD2:  D/L: " << m_downlink << std::endl;
+                    //std::cerr << "DSDYSF::processVD2:  D/L: " << m_downlink << std::endl;
                     break;
                 case 3:
                     memcpy(m_uplink, bytes, 10);
                     m_uplink[10] = '\0';
-                    std::cerr << "DSDYSF::processVD2:  U/L: " << m_uplink << std::endl;
+                    //std::cerr << "DSDYSF::processVD2:  U/L: " << m_uplink << std::endl;
                     break;
                 case 4:
                     processCSD3_1(bytes);
@@ -616,6 +640,12 @@ void DSDYSF::processVD2(int symbolIndex, unsigned char dibit)
                 default:
                     break;
                 }
+
+                noteDCH(true);
+            }
+            else
+            {
+                noteDCH(false);
             }
         }
     }
@@ -650,9 +680,10 @@ void DSDYSF::processVD2Voice(int mbeIndex, unsigned char dibit)
         int nbOnes;
         unsigned int mbeIndex;
         unsigned int bit;
+        uint32_t splitTriplets = 0;
 
         if (m_vd2BitsRaw[103] != 0) {
-            std::cerr << "DSDYSF::processVD2Voice: error bit 103" << std::endl;
+            //std::cerr << "DSDYSF::processVD2Voice: error bit 103" << std::endl;
         }
 
         for (int i = 0; i < 103; i++)
@@ -663,6 +694,7 @@ void DSDYSF::processVD2Voice(int mbeIndex, unsigned char dibit)
                 {
                     nbOnes = m_vd2BitsRaw[i-2] + m_vd2BitsRaw[i-1] + m_vd2BitsRaw[i];
                     bit = nbOnes > 1 ? 1 : 0;
+                    if (nbOnes == 1 || nbOnes == 2) splitTriplets++; // one bit out-voted
                     m_vd2MBEBits[i/3] = bit;
                     mbeIndex = m_vd2DVSIInterleave[i/3];
                     m_dsdDecoder->m_mbeDVFrame1[mbeIndex/8] += bit<<(7-(mbeIndex%8));
@@ -675,6 +707,8 @@ void DSDYSF::processVD2Voice(int mbeIndex, unsigned char dibit)
                 m_dsdDecoder->m_mbeDVFrame1[mbeIndex/8] += (m_vd2BitsRaw[i])<<(7-(mbeIndex%8));
             }
         }
+
+        noteVoiceFEC(27, splitTriplets);
 
         m_dsdDecoder->m_mbeDecoder1.processData(0, (char *) m_vd2MBEBits);
         m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
@@ -701,7 +735,7 @@ void DSDYSF::processVFRSubHeader(int symbolIndex, unsigned char dibit)
 
         if (symbolIndex == 5*36 - 1)
         {
-            std::cerr << "DSDYSF::processVFRSubHeader: CSD3" << std::endl;
+            //std::cerr << "DSDYSF::processVFRSubHeader: CSD3" << std::endl;
 
             unsigned char bytes[22];
 
@@ -711,6 +745,11 @@ void DSDYSF::processVFRSubHeader(int symbolIndex, unsigned char dibit)
             {
                 processCSD3_1(bytes);
                 processCSD3_2(&bytes[10]);
+                noteDCH(true);
+            }
+            else
+            {
+                noteDCH(false);
             }
         }
     }
@@ -806,32 +845,34 @@ void DSDYSF::procesVFRFrame(int mbeIndex, unsigned char dibit)
 
         scrambleVFR(m_vfrBitsRaw+23, m_vfrBitsRaw+23, 144-23-7, seed, 4);
 
+        int fecErrs = 0; // Golay(23,12) x4 + Hamming(15,11) x3 corrected bits
+
         // u0
-        GolayMBE::mbe_golay2312(m_vfrBitsRaw, m_vfrBits);
+        fecErrs += GolayMBE::mbe_golay2312(m_vfrBitsRaw, m_vfrBits);
 //        memcpy(m_vfrBits, m_vfrBitsRaw, 12);
 
         // u1
-        GolayMBE::mbe_golay2312(&m_vfrBitsRaw[23], &m_vfrBits[12]);
+        fecErrs += GolayMBE::mbe_golay2312(&m_vfrBitsRaw[23], &m_vfrBits[12]);
 //        memcpy(&m_vfrBits[12], &m_vfrBitsRaw[23], 12);
 
         // u2
-        GolayMBE::mbe_golay2312(&m_vfrBitsRaw[46], &m_vfrBits[24]);
+        fecErrs += GolayMBE::mbe_golay2312(&m_vfrBitsRaw[46], &m_vfrBits[24]);
 //        memcpy(&m_vfrBits[24], &m_vfrBitsRaw[46], 12);
 
         // u3
-        GolayMBE::mbe_golay2312(&m_vfrBitsRaw[69], &m_vfrBits[36]);
+        fecErrs += GolayMBE::mbe_golay2312(&m_vfrBitsRaw[69], &m_vfrBits[36]);
 //        memcpy(&m_vfrBits[36], &m_vfrBitsRaw[69], 12);
 
         // u4
-        HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[92], &m_vfrBits[48]);
+        fecErrs += HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[92], &m_vfrBits[48]);
 //        memcpy(&m_vfrBits[48], &m_vfrBitsRaw[92], 11);
 
         // u5
-        HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[107], &m_vfrBits[59]);
+        fecErrs += HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[107], &m_vfrBits[59]);
 //        memcpy(&m_vfrBits[59], &m_vfrBitsRaw[107], 11);
 
         // u6
-        HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[122], &m_vfrBits[70]);
+        fecErrs += HammingMBE::mbe_hamming1511(&m_vfrBitsRaw[122], &m_vfrBits[70]);
 //        memcpy(&m_vfrBits[70], &m_vfrBitsRaw[122], 11);
 
         // u7
@@ -842,9 +883,146 @@ void DSDYSF::procesVFRFrame(int mbeIndex, unsigned char dibit)
             m_dsdDecoder->m_mbeDVFrame1[i/8] += m_vfrBits[i]<<(7-(i%8));
         }
 
+        noteVoiceFEC(7, (uint32_t) fecErrs);
+
         m_dsdDecoder->m_mbeDecoder1.processData((char *) m_vfrBits, 0);
         m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
 	}
+}
+
+void DSDYSF::noteFICH()
+{
+    const std::uint64_t now = nowMsSteady();
+    bool newCall = false;
+
+    {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        YSFChannelStatus& st = m_status;
+        st.lastFrameMs = now;
+
+        if (m_fichError == FICHErrorGolay)
+        {
+            st.fichGolayFailCount++;
+            return;
+        }
+        if (m_fichError == FICHErrorCRC)
+        {
+            st.fichCrcFailCount++;
+            return;
+        }
+
+        const FrameInformation fi = m_fich.getFrameInformation();
+
+        st.fichOkCount++;
+        st.fichValid      = true;
+        st.frameInfo      = (int) fi;
+        st.callMode       = (int) m_fich.getCallMode();
+        st.messageRouting = (int) m_fich.getMessageRouting();
+        st.narrow         = m_fich.isNarrowMode();
+        st.internetPath   = m_fich.isInternetPath();
+        st.sqlEnabled     = m_fich.isSquelchCodeEnabled();
+        st.sqlCode        = m_fich.getSquelchCode();
+
+        const bool stale = !st.active || now < st.lastSeenMs || (now - st.lastSeenMs) > YSF_CALL_STALE_MS;
+
+        switch (fi)
+        {
+        case FIHeader:
+            st.headerCount++;
+            // A header opens a new call, unless it repeats the header that
+            // just opened the current one (no communication frames yet).
+            newCall = stale || !st.headerSeen || st.voiceFrames > 0;
+            break;
+        case FICommunication:
+            st.dtCount[(int) m_fich.getDataType() & 3]++;
+            st.dataType = (int) m_fich.getDataType();
+            newCall = stale;
+            break;
+        case FITerminator:
+            st.terminatorCount++;
+            if (st.active)
+            {
+                st.active = false;
+                st.endMs = now;
+                st.lastSeenMs = now;
+            }
+            break;
+        default:
+            break;
+        }
+
+        if (newCall)
+        {
+            st.active      = true;
+            st.headerSeen  = (fi == FIHeader);
+            st.startMs     = now;
+            st.endMs       = 0;
+            st.voiceFrames = 0;
+            st.dest.clear(); st.src.clear();
+            st.downlink.clear(); st.uplink.clear();
+            for (auto& r : st.rem) r.clear();
+            st.destId.clear(); st.srcId.clear();
+            st.totalCalls++;
+        }
+
+        if (st.active && (fi == FIHeader || fi == FICommunication))
+        {
+            st.lastSeenMs = now;
+
+            if (fi == FICommunication && m_fich.getDataType() != DTDataFullRate)
+            {
+                st.voiceFrames++;
+                st.totalVoiceFrames++;
+            }
+        }
+    }
+
+    if (newCall)
+    {
+        // Callsigns of the previous call must not leak into this one
+        memset(m_dest, 0, 10+1);
+        memset(m_src, 0, 10+1);
+        memset(m_downlink, 0, 10+1);
+        memset(m_uplink, 0, 10+1);
+        memset(m_rem1, 0, 5+1);
+        memset(m_rem2, 0, 5+1);
+        memset(m_rem3, 0, 5+1);
+        memset(m_rem4, 0, 5+1);
+        memset(m_destId, 0, 5+1);
+        memset(m_srcId, 0, 5+1);
+    }
+}
+
+void DSDYSF::noteDCH(bool crcOk)
+{
+    std::lock_guard<std::mutex> lock(m_statusMutex);
+    YSFChannelStatus& st = m_status;
+
+    if (!crcOk)
+    {
+        st.dchFailCount++;
+        return;
+    }
+
+    // Republish every callsign field: each CSD fills a different subset
+    st.dchOkCount++;
+    st.dest     = m_dest;
+    st.src      = m_src;
+    st.downlink = m_downlink;
+    st.uplink   = m_uplink;
+    st.rem[0]   = m_rem1;
+    st.rem[1]   = m_rem2;
+    st.rem[2]   = m_rem3;
+    st.rem[3]   = m_rem4;
+    st.destId   = m_destId;
+    st.srcId    = m_srcId;
+}
+
+void DSDYSF::noteVoiceFEC(uint32_t codewords, uint32_t corrected)
+{
+    std::lock_guard<std::mutex> lock(m_statusMutex);
+    m_status.vchCodewords += codewords;
+    m_status.vchCorrected += corrected;
 }
 
 void DSDYSF::storeSymbolDV(unsigned char *mbeFrame, int dibitindex, unsigned char dibit, bool invertDibit)
@@ -865,7 +1043,7 @@ void DSDYSF::storeSymbolDV(unsigned char *mbeFrame, int dibitindex, unsigned cha
 bool DSDYSF::checkCRC16(unsigned char *bits,  unsigned long nbBytes, unsigned char *xoredBytes)
 {
     unsigned char bytes[22];
-//    std::cerr << "DSDYSF::checkCRC16: value: ";
+    //std::cerr << "DSDYSF::checkCRC16: value: ";
 
     for (unsigned int i = 0; i < nbBytes+2; i++)
     {
@@ -882,12 +1060,12 @@ bool DSDYSF::checkCRC16(unsigned char *bits,  unsigned long nbBytes, unsigned ch
         {
             xoredBytes[i] = bytes[i] ^ m_pn.getByte(i);
         }
-//        std::cerr << std::hex << (int) bytes[i] << " ";
+        //std::cerr << std::hex << (int) bytes[i] << " ";
     }
 
     unsigned int crc = (bytes[nbBytes]<<8) + bytes[nbBytes+1];
 
-//    std::cerr << "crc: " << std::hex << crc << std::endl;
+    //std::cerr << "crc: " << std::hex << crc << std::endl;
 
     return m_crc.crctablefast(bytes, nbBytes) == crc;
 }

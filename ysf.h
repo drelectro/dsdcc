@@ -20,6 +20,8 @@
 #include <string.h>
 #include <iostream>
 #include <string>
+#include <cstdint>
+#include <mutex>
 
 #include "viterbi5.h"
 #include "fec.h"
@@ -199,6 +201,66 @@ public:
     const char *getDestId() const { return m_destId; }
     const char *getSrcId() const { return m_srcId; }
 
+    // Snapshot of YSF channel activity — the current (or most recent) call's
+    // callsigns and FICH parameters, plus frame and FEC counters.  Written by
+    // the decoder thread; copy via getChannelStatusCopy() from any thread.
+    struct YSFChannelStatus
+    {
+        // Current (or most recent) call
+        bool     active = false;          //!< header / voice seen and no terminator yet; UI treats >2 s silence as lost
+        bool     headerSeen = false;      //!< call opened by a header frame (false = late entry)
+        uint64_t startMs = 0;             //!< first frame of the current call
+        uint64_t lastSeenMs = 0;          //!< last header / communication frame of the current call
+        uint64_t endMs = 0;               //!< terminator time (0 = no clean end seen)
+        uint32_t voiceFrames = 0;         //!< 100 ms communication frames carrying voice in the current call
+
+        std::string dest, src;            //!< CSD1 / VD2 DCH callsigns (raw 10 chars, space padded)
+        std::string downlink, uplink;     //!< CSD2 / VD2 DCH repeater callsigns
+        std::string rem[4];               //!< CSD3 supplementary fields (5 chars each)
+        std::string destId, srcId;        //!< Radio ID call mode identifiers
+
+        // Most recent CRC-valid FICH
+        bool     fichValid = false;
+        int      frameInfo = 0;           //!< FrameInformation
+        int      callMode = 0;            //!< CallMode
+        int      dataType = 0;            //!< DataType of the last communication frame
+        int      messageRouting = 0;      //!< MessageRouting
+        bool     narrow = false;          //!< Dev bit: narrow deviation
+        bool     internetPath = false;    //!< VoIP bit
+        bool     sqlEnabled = false;      //!< squelch code / DG-ID enabled
+        int      sqlCode = 0;             //!< squelch code (DG-ID on Fusion II radios)
+
+        uint64_t lastFrameMs = 0;         //!< last framed YSF frame (any FICH outcome)
+
+        // Cumulative counters (survive across calls)
+        uint32_t totalCalls = 0;
+        uint32_t totalVoiceFrames = 0;
+        uint32_t headerCount = 0;
+        uint32_t terminatorCount = 0;
+        uint32_t dtCount[4] = {0, 0, 0, 0}; //!< communication frames by DataType (V/D1, Data FR, V/D2, Voice FR)
+        uint32_t fichOkCount = 0;         //!< FICH Golay + CRC good — BLER = fail / (ok + fail)
+        uint32_t fichGolayFailCount = 0;  //!< FICH Golay(24,12) failures
+        uint32_t fichCrcFailCount = 0;    //!< FICH CRC16 failures
+        uint32_t dchOkCount = 0;          //!< DCH (CSD) CRC16 good
+        uint32_t dchFailCount = 0;        //!< DCH (CSD) CRC16 failures
+        uint32_t vchCodewords = 0;        //!< voice FEC codewords checked (V/D2 repetition triplets, VFR Golay/Hamming words)
+        uint32_t vchCorrected = 0;        //!< voice FEC corrections (V/D2 split triplets, VFR corrected bits)
+    };
+
+    YSFChannelStatus getChannelStatusCopy() const
+    {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        return m_status;
+    }
+
+    // Discard all accumulated channel status (call, counters); safe from any
+    // thread. Used on receiver retune and by the status window's Reset button.
+    void resetChannelStatus()
+    {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        m_status = YSFChannelStatus();
+    }
+
     static const char *ysfChannelTypeText[4];
     static const char *ysfDataTypeText[4];
     static const char *ysfCallModeText[4];
@@ -213,6 +275,9 @@ private:
     void processVFR(int symbolIndex, unsigned char dibit);
     void processVFRSubHeader(int symbolIndex, unsigned char dibit);
     void processVFRFullIMBE(int symbolIndex, unsigned char dibit);
+    void noteFICH();                                        //!< Fold a completed FICH into the call state and counters
+    void noteDCH(bool crcOk);                               //!< Count a DCH (CSD) CRC result
+    void noteVoiceFEC(uint32_t codewords, uint32_t corrected); //!< Count voice FEC results
     void processCSD1(unsigned char *dchBytes);
     void processCSD2(unsigned char *dchBytes);
     void processCSD3_1(unsigned char *dchBytes);
@@ -262,6 +327,9 @@ private:
     char m_rem4[5+1];      //!< Callsign supplementary information #4 from CSD3
     char m_destId[5+1];    //!< Destination radio ID
     char m_srcId[5+1];     //!< Source radio ID
+
+    YSFChannelStatus m_status;
+    mutable std::mutex m_statusMutex;
 
     // AMBE interleave
     const int *w, *x, *y, *z;
