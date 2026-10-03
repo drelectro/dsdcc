@@ -221,6 +221,13 @@ public:
         uint32_t embFailCount = 0;           //!< EMB QR(16,7,6) failures
         uint32_t dataBptcFailCount = 0;      //!< BPTC(196,96) failures on data bursts
         uint32_t piHeaderCount = 0;          //!< PI headers seen (encrypted call setup)
+
+        // Carrier lock gate (see DSDDMR::setLockGate).  Everything above only
+        // counts while the decoder is locked; bursts framed by a sync that was
+        // never confirmed (noise, other modes) land here instead.
+        bool     locked = false;             //!< DMR carrier confirmed right now
+        uint32_t lockCount = 0;              //!< times the lock was acquired
+        uint32_t unconfirmedBurstCount = 0;  //!< bursts processed without a confirmed lock (discarded)
     };
 
     DMRChannelStatus getChannelStatusCopy() const
@@ -234,7 +241,9 @@ public:
     void resetChannelStatus()
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
+        const bool locked = m_channelStatus.locked; // lock state is owned by the DSP thread
         m_channelStatus = DMRChannelStatus();
+        m_channelStatus.locked = locked;
     }
 
     // Discard all accumulated network state (identity, learned channel plan,
@@ -249,6 +258,16 @@ public:
     }
 
     void setVerbosity(int verbosity) { m_verbosity = verbosity; }
+
+    // Carrier lock gate (default on).  A 24-symbol sync with 2 errors allowed
+    // fires ~0.35 times/s on pure noise, and the EMB QR(16,7) decode accepts
+    // ~27 % of random words, so without a gate noise produces voice and a
+    // plausible BLER.  With the gate, audio and channel statistics only flow
+    // once the stream is confirmed by a CRC-good burst or by two near-clean
+    // (<= 1 corrected bit) EMB / Slot Type decodes agreeing on the colour code.
+    // false = legacy behaviour (every sync is trusted).
+    void setLockGate(bool enable) { m_lockGateEnabled = enable; }
+    bool getLockGate() const { return m_lockGateEnabled; }
 
     // DMRA Manufacturer's ID (FID) → vendor name, or nullptr for the ETSI-standard
     // FID (0x00) and unrecognised codes. Shared by the bench and the status widget.
@@ -316,6 +335,15 @@ private:
     void processAssembledMBC(int slotIdx);                  //!< Decode a fully assembled multi-block CSBK
     void noteCSBKSyncAcquired();
     void noteCSBKSyncLost();
+    void noteColdSync();                                    //!< Sync found from a cold search: drop the lock if the stream gap is too long
+    void noteBurstEnd();                                    //!< A burst was fully processed
+    void noteLockEvidence();                                //!< CRC-good burst: lock immediately
+    void noteCleanColorCode(unsigned char cc);              //!< Near-clean CC decode: lock on the second agreeing one
+    void noteEMBResult(bool ok);                            //!< Track EMB failure runs while locked
+    void dropLock();
+    void holdVoiceFrame(int slotIdx);                       //!< Keep an AMBE frame decoded before the lock, for replay on confirmation
+    bool voiceGateOpen() const { return !m_lockGateEnabled || m_locked; }
+    DMRChannelStatus& cs() { return voiceGateOpen() ? m_channelStatus : m_unlockedStatus; } //!< counter sink (caller holds m_stateMutex)
     bool shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, const std::string& messageText);
 
     // Per-opcode CSBK payload parsers (TS 102 361-4). Each appends decoded fields to msg
@@ -405,7 +433,27 @@ private:
 
     DMRNetworkState m_networkState;
     DMRChannelStatus m_channelStatus;
+    DMRChannelStatus m_unlockedStatus;    //!< scratch sink for counters while unlocked (DSP thread only, discarded)
     mutable std::mutex m_stateMutex;
+
+    // Carrier lock gate state (DSP thread only)
+    static const int m_lockHoldSymbols = 720;  //!< 150 ms without a burst drops the lock
+    bool         m_lockGateEnabled = true;
+    bool         m_locked = false;
+    int          m_cleanColorCode = -1;   //!< CC of the last near-clean decode awaiting confirmation
+    bool         m_haveBurstEnd = false;
+    unsigned int m_lastBurstEndSymbol = 0;
+    int          m_embFailRun = 0;
+
+    // Voice decoded during acquisition: replayed into the vocoder when the lock
+    // is confirmed (so a real call loses no audio), discarded otherwise.
+    struct PendingVoiceFrame
+    {
+        char ambe[4][24];
+        int  slotIdx;
+    };
+    static const size_t m_pendingVoiceMax = 36;  //!< 2 superframes per slot (720 ms)
+    std::vector<PendingVoiceFrame> m_pendingVoice;
 
     int m_verbosity = 1;
 };

@@ -186,6 +186,7 @@ DSDDMR::~DSDDMR()
 void DSDDMR::initData()
 {
 //    DSD_LOG("DSDDMR::initData");
+    noteColdSync();
     noteCSBKSyncAcquired();
     m_burstType = DSDDMRBaseStation;
     processDataFirstHalf(90+1);
@@ -194,6 +195,7 @@ void DSDDMR::initData()
 void DSDDMR::initDataMS()
 {
 //    DSD_LOG("DSDDMR::initDataMS");
+    noteColdSync();
     noteCSBKSyncAcquired();
     m_burstType = DSDDMRMobileStation;
     processDataFirstHalfMS();
@@ -202,6 +204,7 @@ void DSDDMR::initDataMS()
 void DSDDMR::initVoice()
 {
 //    DSD_LOG("DSDDMR::initVoice");
+    noteColdSync();
     m_burstType = DSDDMRBaseStation;
     processVoiceFirstHalf(90+1);
 }
@@ -209,6 +212,7 @@ void DSDDMR::initVoice()
 void DSDDMR::initVoiceMS()
 {
 //    DSD_LOG("DSDDMR::initVoiceMS");
+    noteColdSync();
     m_burstType = DSDDMRMobileStation;
     processVoiceFirstHalfMS();
 }
@@ -229,6 +233,8 @@ void DSDDMR::processData()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
+        noteBurstEnd();
+
         if (m_slot == DSDDMRSlot1)
         {
             if (m_voice1FrameCount < DMR_VOX_SUPERFRAME_LEN) // continuation expected on slot + 2
@@ -310,6 +316,7 @@ void DSDDMR::processDataMS()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
+        noteBurstEnd();
         m_dsdDecoder->resetFrameSync(); // back to sync
         m_symbolIndex = 0;
     }
@@ -337,6 +344,8 @@ void DSDDMR::processVoice()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
+        noteBurstEnd();
+
         if (m_slot == DSDDMRSlot1)
         {
             m_voice1FrameCount++;
@@ -470,6 +479,7 @@ void DSDDMR::processVoiceMS()
 
     if (m_symbolIndex == IN_DIBITS(DMR_TS_LEN) - 1) // last dibit
     {
+        noteBurstEnd();
         m_voice1FrameCount++;
         noteVoiceBurst(0);
 //    DSD_LOG("DSDDMR::processVoiceMS: " << m_symbolIndex << " : " << m_voice1FrameCount);
@@ -659,7 +669,7 @@ void DSDDMR::processDataDibit(unsigned char dibit)
         int dataSecIdx = IN_DIBITS(DMR_DATA_PART_LEN) + (m_symbolIndex - (nextPartOff - IN_DIBITS(DMR_DATA_PART_LEN)));
         m_dataDibits[dataSecIdx] = dibit;
 
-        if (m_symbolIndex == nextPartOff - 1)
+        if ((m_symbolIndex == nextPartOff - 1) && (m_dataType != DSDDMRDataUnknown))
         {
             unsigned char infoBits[96];
             if (decodeBPTC196_96(infoBits))
@@ -715,8 +725,8 @@ void DSDDMR::processDataDibit(unsigned char dibit)
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
                 m_networkState.bptcFailCount++;
-                m_channelStatus.dataBptcFailCount++;
-                m_channelStatus.frameNokCount++;
+                cs().dataBptcFailCount++;
+                cs().frameNokCount++;
             }
             else if (m_dataType == DSDDMRDataVoiceLCHeader || m_dataType == DSDDMRDataTerminatorWithLC
                   || m_dataType == DSDDMRDataPIHeader || m_dataType == DSDDMRDataDataHeader
@@ -726,8 +736,8 @@ void DSDDMR::processDataDibit(unsigned char dibit)
                 // BPTC-coded types outside the trunking stats (rate 3/4 and rate 1
                 // bursts are not BPTC coded — a failed decode there means nothing).
                 std::lock_guard<std::mutex> lock(m_stateMutex);
-                m_channelStatus.dataBptcFailCount++;
-                m_channelStatus.frameNokCount++;
+                cs().dataBptcFailCount++;
+                cs().frameNokCount++;
             }
             else {
 				DSD_LOG("DSDDMR::processDataDibit: Non-BPTC data type: " << (int)m_dataType);
@@ -838,13 +848,21 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
         {
             if (m_slot == DSDDMRSlot1)
             {
-                m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(0);
+                }
             }
             else if (m_slot == DSDDMRSlot2)
             {
-                m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(1);
+                }
             }
         }
         return;
@@ -955,15 +973,23 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
         {
             if (m_slot == DSDDMRSlot1)
             {
-                m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                memcpy(m_dsdDecoder->m_mbeDVFrame1, m_mbeDVFrame, IN_BYTES(DMR_VOCODER_FRAME_LEN));
-                m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    memcpy(m_dsdDecoder->m_mbeDVFrame1, m_mbeDVFrame, IN_BYTES(DMR_VOCODER_FRAME_LEN));
+                    m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(0);
+                }
             }
             else if (m_slot == DSDDMRSlot2)
             {
-                m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                memcpy(m_dsdDecoder->m_mbeDVFrame2, m_mbeDVFrame, IN_BYTES(DMR_VOCODER_FRAME_LEN));
-                m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    memcpy(m_dsdDecoder->m_mbeDVFrame2, m_mbeDVFrame, IN_BYTES(DMR_VOCODER_FRAME_LEN));
+                    m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(1);
+                }
             }
         }
         return;
@@ -1009,13 +1035,21 @@ void DSDDMR::processVoiceDibit(unsigned char dibit)
         {
             if (m_slot == DSDDMRSlot1)
             {
-                m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder1.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    m_dsdDecoder->m_mbeDVReady1 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(0);
+                }
             }
             else if (m_slot == DSDDMRSlot2)
             {
-                m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
-                m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                if (voiceGateOpen()) {
+                    m_dsdDecoder->m_mbeDecoder2.processFrame(0, m_dsdDecoder->ambe_fr, 0);
+                    m_dsdDecoder->m_mbeDVReady2 = true; // Indicate that a DVSI frame is available
+                } else {
+                    holdVoiceFrame(1);
+                }
             }
         }
         return;
@@ -1065,8 +1099,8 @@ void DSDDMR::decodeCACH(unsigned char *cachBits)
             m_cachOK = false;
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
-                m_channelStatus.cachFailCount++;
-                m_channelStatus.frameNokCount++;
+                cs().cachFailCount++;
+                cs().frameNokCount++;
             }
 //            DSD_LOG("DSDDMR::decodeCACH: KO: at: " << m_cachSymbolIndex);
         }
@@ -1083,8 +1117,15 @@ void DSDDMR::processSlotTypePDU()
         slotTypeBits[2*i + 1] = m_slotTypePDU_dibits[i] & 1;
     }
 
+    unsigned char rxBits[DMR_SLOT_TYPE_PART_LEN * 2];
+    memcpy(rxBits, slotTypeBits, sizeof(rxBits));
+
     if (m_golay_20_8.decode(slotTypeBits))
     {
+        int corrected = 0;
+        for (int i = 0; i < DMR_SLOT_TYPE_PART_LEN * 2; i++) corrected += (rxBits[i] != slotTypeBits[i]);
+        if (corrected <= 1) noteCleanColorCode((slotTypeBits[0] << 3) + (slotTypeBits[1] << 2) + (slotTypeBits[2] << 1) + slotTypeBits[3]);
+
         m_colorCode = (slotTypeBits[0] << 3) + (slotTypeBits[1] << 2) + (slotTypeBits[2] << 1) + slotTypeBits[3];
         sprintf(&m_slotText[1], "%02d ", m_colorCode);
 
@@ -1092,9 +1133,9 @@ void DSDDMR::processSlotTypePDU()
 
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_channelStatus.colorCode = m_colorCode;
-            m_channelStatus.colorCodeValid = true;
-            m_channelStatus.lastBurstMs = nowMsSteady();
+            cs().colorCode = m_colorCode;
+            cs().colorCodeValid = true;
+            cs().lastBurstMs = nowMsSteady();
         }
 
         if (dataType >= DMR_TYPES_COUNT)
@@ -1113,10 +1154,11 @@ void DSDDMR::processSlotTypePDU()
     else
     {
         memcpy(&m_slotText[1], "-- UNK", 6);
+        m_dataType = DSDDMRDataUnknown; // payload of an unidentified burst is not decoded (was: stale type of the previous burst)
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_channelStatus.slotTypeFailCount++;
-            m_channelStatus.frameNokCount++;
+            cs().slotTypeFailCount++;
+            cs().frameNokCount++;
         }
         if (m_verbosity > 1) DSD_LOG("DSDDMR::processSlotTypePDU KO");
     }
@@ -1132,26 +1174,37 @@ bool DSDDMR::processEMB()
         embBits[2*i + 1] = m_emb_dibits[i] & 1;
     }
 
+    unsigned char rxBits[DMR_EMB_PART_LEN * 2];
+    memcpy(rxBits, embBits, sizeof(rxBits));
+
     if (m_qr_16_7_6.decode(embBits))
     {
+        int corrected = 0;
+        for (int i = 0; i < DMR_EMB_PART_LEN * 2; i++) corrected += (rxBits[i] != embBits[i]);
+        noteEMBResult(true);
+        if (corrected <= 1) noteCleanColorCode((embBits[0] << 3) + (embBits[1] << 2) + (embBits[2] << 1) + embBits[3]);
+
         m_colorCode = (embBits[0] << 3) + (embBits[1] << 2) + (embBits[2] << 1) + embBits[3];
         sprintf(&m_slotText[1], "%02d", m_colorCode);
         m_slotText[3] = ' ';
         m_lcss = (embBits[5] << 1) + embBits[6];
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_channelStatus.colorCode = m_colorCode;
-            m_channelStatus.colorCodeValid = true;
-            m_channelStatus.lastBurstMs = nowMsSteady();
-            m_channelStatus.frameOkCount++;   // voice burst judged clean by its EMB check
+            cs().colorCode = m_colorCode;
+            cs().colorCodeValid = true;
+            cs().lastBurstMs = nowMsSteady();
+            cs().frameOkCount++;   // voice burst judged clean by its EMB check
         }
         return true;
     }
     else
     {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_channelStatus.embFailCount++;
-        m_channelStatus.frameNokCount++;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            cs().embFailCount++;
+            cs().frameNokCount++;
+        }
+        noteEMBResult(false); // after counting: this failure may drop the lock
         return false;
     }
 }
@@ -1191,7 +1244,7 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
                     voiceEmbSig_OK = false;
                     {
                         std::lock_guard<std::mutex> lock(m_stateMutex);
-                        m_channelStatus.slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
+                        cs().slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
                     }
                     break;
                 }
@@ -1270,7 +1323,7 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
                 voiceEmbSig_OK = false;
                 {
                     std::lock_guard<std::mutex> lock(m_stateMutex);
-                    m_channelStatus.slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
+                    cs().slot[(m_slot == DSDDMRSlot2) ? 1 : 0].embLcFailCount++;
                 }
             }
         }
@@ -1822,6 +1875,10 @@ void DSDDMR::noteCSBKSyncLost()
 
 bool DSDDMR::shouldLogCSBK(unsigned char csbko, unsigned char mfid, bool crcOK, const std::string& messageText)
 {
+    if (!crcOK && !voiceGateOpen()) {
+        return false; // a CRC failure on an unconfirmed stream is almost always a false sync
+    }
+
     // Highest verbosity: always print all CSBKs. Lowest: print CRC failures only.
     if (m_verbosity >= 3)
         return true;
@@ -2353,14 +2410,15 @@ void DSDDMR::decodeCSBK(const unsigned char *infoBits)
 
     // Verify CRC-CCITT-16 with TS 102 361-1 §B.3.12 CSBK mask.
     bool crcOK = csbkCRCOK(infoBits, 0xA5A5, m_verbosity);
+    if (crcOK) noteLockEvidence();
 
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_networkState.csbkTotalCount++;
         if (crcOK) m_networkState.csbkCrcOkCount++;
         else       m_networkState.csbkCrcFailCount++;
-        if (crcOK) m_channelStatus.frameOkCount++;
-        else       m_channelStatus.frameNokCount++;
+        if (crcOK) cs().frameOkCount++;
+        else       cs().frameNokCount++;
         // A recognised manufacturer FID on a clean frame identifies the vendor.
         if (crcOK && mfid != 0x00 && fidVendorName(mfid))
             m_networkState.vendorFid = mfid;
@@ -2420,6 +2478,7 @@ void DSDDMR::decodeFullLC(const unsigned char *infoBits, bool terminator)
         bytes[i / 8] |= (infoBits[i] << (7 - (i % 8)));
 
     const bool crcOK = fullLCCrcOK(bytes, terminator ? 0x99 : 0x96);
+    if (crcOK) noteLockEvidence();
     const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
 
     const unsigned char pf   = infoBits[0];            //!< protect flag: LC is encrypted
@@ -2451,13 +2510,13 @@ void DSDDMR::decodeFullLC(const unsigned char *infoBits, bool terminator)
 
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+        DMRChannelStatus::SlotCall& sc = cs().slot[slotIdx];
 
         if (terminator) { if (crcOK) sc.tlcOkCount++; else sc.tlcFailCount++; }
         else            { if (crcOK) sc.vlcOkCount++; else sc.vlcFailCount++; }
-        if (crcOK) m_channelStatus.frameOkCount++;
-        else       m_channelStatus.frameNokCount++;
-        m_channelStatus.lastBurstMs = nowMs;
+        if (crcOK) cs().frameOkCount++;
+        else       cs().frameNokCount++;
+        cs().lastBurstMs = nowMs;
 
         if (crcOK && isVoiceLC)
         {
@@ -2549,18 +2608,19 @@ void DSDDMR::decodePIHeader(const unsigned char *infoBits)
 {
     // CRC-CCITT-16 with the PI header mask (TS 102 361-1 §B.3.12)
     const bool crcOK = csbkCRCOK(infoBits, 0x6969, 0 /* quiet: mask is known-good */);
+    if (crcOK) noteLockEvidence();
     const int slotIdx = (m_slot == DSDDMRSlot2) ? 1 : 0;
 
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_channelStatus.piHeaderCount++;
-        m_channelStatus.lastBurstMs = nowMsSteady();
-        if (crcOK) m_channelStatus.frameOkCount++;
-        else       m_channelStatus.frameNokCount++;
+        cs().piHeaderCount++;
+        cs().lastBurstMs = nowMsSteady();
+        if (crcOK) cs().frameOkCount++;
+        else       cs().frameNokCount++;
         if (crcOK)
         {
             // A PI header announces an encrypted call on this slot.
-            m_channelStatus.slot[slotIdx].privacy = true;
+            cs().slot[slotIdx].privacy = true;
         }
     }
 
@@ -2584,11 +2644,142 @@ void DSDDMR::decodePIHeader(const unsigned char *infoBits)
     if (shouldLogCSBK(0x82, 0, crcOK, logLine)) DSD_LOG(logLine);
 }
 
+// ---- Carrier lock gate ------------------------------------------------------
+
+void DSDDMR::noteColdSync()
+{
+    const unsigned int now = (unsigned int) m_dsdDecoder->m_state.symbolcnt;
+
+    if (!m_haveBurstEnd || (now - m_lastBurstEndSymbol > (unsigned int) m_lockHoldSymbols))
+    {
+        // Not a continuation of the stream we were following: start over.
+        if (m_locked && m_verbosity > 1) DSD_LOG("DMR lock lost: no burst for " << (now - m_lastBurstEndSymbol) << " symbols");
+        if (m_verbosity > 2) DSD_LOG("DMR acquisition restart @" << now);
+        dropLock();
+        m_cleanColorCode = -1;
+        m_unlockedStatus = DMRChannelStatus();
+    }
+}
+
+void DSDDMR::noteBurstEnd()
+{
+    m_lastBurstEndSymbol = (unsigned int) m_dsdDecoder->m_state.symbolcnt;
+    m_haveBurstEnd = true;
+
+    if (!voiceGateOpen())
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus.unconfirmedBurstCount++;
+    }
+}
+
+void DSDDMR::noteLockEvidence()
+{
+    m_embFailRun = 0;
+
+    if (!m_locked && m_lockGateEnabled)
+    {
+        if (m_verbosity > 1) DSD_LOG("DMR lock acquired (slot " << ((m_slot == DSDDMRSlot2) ? 2 : 1) << ") @" << m_dsdDecoder->m_state.symbolcnt);
+        m_locked = true;
+
+        // Release the voice held since acquisition started
+        for (PendingVoiceFrame& f : m_pendingVoice)
+        {
+            if (f.slotIdx == 0) {
+                m_dsdDecoder->m_mbeDecoder1.processFrame(0, f.ambe, 0);
+            } else {
+                m_dsdDecoder->m_mbeDecoder2.processFrame(0, f.ambe, 0);
+            }
+        }
+        m_pendingVoice.clear();
+
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus.locked = true;
+        m_channelStatus.lockCount++;
+
+        // The bursts since acquisition started belong to this stream: count them.
+        const DMRChannelStatus& u = m_unlockedStatus;
+        DMRChannelStatus& c = m_channelStatus;
+        c.frameOkCount      += u.frameOkCount;
+        c.frameNokCount     += u.frameNokCount;
+        c.cachFailCount     += u.cachFailCount;
+        c.slotTypeFailCount += u.slotTypeFailCount;
+        c.embFailCount      += u.embFailCount;
+        c.dataBptcFailCount += u.dataBptcFailCount;
+        c.piHeaderCount     += u.piHeaderCount;
+        for (int i = 0; i < 2; i++)
+        {
+            c.slot[i].totalVoiceBursts += u.slot[i].totalVoiceBursts;
+            c.slot[i].vlcFailCount     += u.slot[i].vlcFailCount;
+            c.slot[i].tlcFailCount     += u.slot[i].tlcFailCount;
+            c.slot[i].embLcFailCount   += u.slot[i].embLcFailCount;
+        }
+        m_unlockedStatus = DMRChannelStatus();
+    }
+}
+
+void DSDDMR::holdVoiceFrame(int slotIdx)
+{
+    if (m_pendingVoice.size() >= m_pendingVoiceMax) {
+        m_pendingVoice.erase(m_pendingVoice.begin());
+    }
+
+    PendingVoiceFrame f;
+    memcpy(f.ambe, m_dsdDecoder->ambe_fr, sizeof(f.ambe));
+    f.slotIdx = slotIdx;
+    m_pendingVoice.push_back(f);
+}
+
+void DSDDMR::noteCleanColorCode(unsigned char cc)
+{
+    if (m_locked) {
+        return;
+    }
+
+    // Noise passes a <=1-correction QR(16,7) check 3 % of the time and Golay(20,8)
+    // 0.5 %; two in one stream agreeing on a 4-bit CC is ~1e-4.
+    if (m_cleanColorCode == (int) cc) {
+        noteLockEvidence();
+    } else {
+        m_cleanColorCode = cc;
+    }
+}
+
+void DSDDMR::noteEMBResult(bool ok)
+{
+    if (ok)
+    {
+        m_embFailRun = 0;
+    }
+    else if (m_locked && (++m_embFailRun >= 2))
+    {
+        // Two voice bursts in a row with an undecodable EMB: the stream has gone
+        // (fade, end of over without terminator, or a false sync while locked).
+        if (m_verbosity > 1) DSD_LOG("DMR lock lost: 2 EMB failures (slot " << ((m_slot == DSDDMRSlot2) ? 2 : 1) << ")");
+        dropLock();
+        m_cleanColorCode = -1;
+    }
+}
+
+void DSDDMR::dropLock()
+{
+    m_embFailRun = 0;
+    if (!m_pendingVoice.empty() && m_verbosity > 2) DSD_LOG("DMR discarded " << m_pendingVoice.size() << " unconfirmed voice frames @" << m_dsdDecoder->m_state.symbolcnt);
+    m_pendingVoice.clear();
+
+    if (m_locked)
+    {
+        m_locked = false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_channelStatus.locked = false;
+    }
+}
+
 void DSDDMR::noteFrameResult(bool ok)
 {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (ok) m_channelStatus.frameOkCount++;
-    else    m_channelStatus.frameNokCount++;
+    if (ok) cs().frameOkCount++;
+    else    cs().frameNokCount++;
 }
 
 void DSDDMR::noteVoiceBurst(int slotIdx)
@@ -2596,7 +2787,7 @@ void DSDDMR::noteVoiceBurst(int slotIdx)
     const std::uint64_t nowMs = nowMsSteady();
 
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+    DMRChannelStatus::SlotCall& sc = cs().slot[slotIdx];
 
     // Voice with no preceding header (late entry, or the previous call ended
     // cleanly) starts a fresh call whose parties arrive with the embedded LC.
@@ -2617,7 +2808,7 @@ void DSDDMR::noteVoiceBurst(int slotIdx)
     sc.voiceBursts++;
     sc.totalVoiceBursts++;
     sc.lastSeenMs = nowMs;
-    m_channelStatus.lastBurstMs = nowMs;
+    cs().lastBurstMs = nowMs;
 }
 
 void DSDDMR::noteEmbeddedLC(int slotIdx, const DMRAddresses& addresses)
@@ -2625,7 +2816,7 @@ void DSDDMR::noteEmbeddedLC(int slotIdx, const DMRAddresses& addresses)
     const std::uint64_t nowMs = nowMsSteady();
 
     std::unique_lock<std::mutex> lock(m_stateMutex);
-    DMRChannelStatus::SlotCall& sc = m_channelStatus.slot[slotIdx];
+    DMRChannelStatus::SlotCall& sc = cs().slot[slotIdx];
 
     sc.embLcOkCount++;
 
@@ -2672,14 +2863,15 @@ void DSDDMR::decodeMBCHeader(const unsigned char *infoBits)
     unsigned char csbko = (unsigned char) bitsToUint(&infoBits[2], 6);
     unsigned char mfid  = (unsigned char) bitsToUint(&infoBits[8], 8);
     bool crcOK = csbkCRCOK(infoBits, 0xAAAA, m_verbosity); // TS 102 361-1 §B.3.12
+    if (crcOK) noteLockEvidence();
 
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_networkState.csbkTotalCount++;
         if (crcOK) m_networkState.csbkCrcOkCount++;
         else       m_networkState.csbkCrcFailCount++;
-        if (crcOK) m_channelStatus.frameOkCount++;
-        else       m_channelStatus.frameNokCount++;
+        if (crcOK) cs().frameOkCount++;
+        else       cs().frameNokCount++;
     }
 
     unsigned int dst = bitsToUint(&infoBits[32], 24);
