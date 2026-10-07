@@ -129,7 +129,12 @@ bool DSDSymbol::pushSample(short sample)
     // 4800 baud streams (P25, DMR, YSF, NXDN96, D-Star) use the Gardner loop.
     // 2400 baud stays on the zero-crossing clock: dPMR regressed under the
     // loop (voice superframes 22 -> 9 on samples/dpmr.dis); 9600 is untested.
-    if (m_timingRecovery == TimingGardner && m_samplesPerSymbol == 10 && !m_noSignal)
+    // While m_noSignal (DMR MS/DMO: the other, silent slot) the loop free-runs
+    // with its state frozen (XMC 2026-10-07). Dropping to the legacy clock here
+    // starved the Gardner history of the skipped slot and restarted the strobe
+    // at an arbitrary phase on every burst: ~15% of AMBE frames in error on a
+    // clean DMO signal.
+    if (m_timingRecovery == TimingGardner && m_samplesPerSymbol == 10)
         return pushSampleGardner(sample);
 
     if (!m_noSignal)
@@ -352,7 +357,9 @@ bool DSDSymbol::pushSample(short sample)
  */
 bool DSDSymbol::pushSampleGardner(short sample)
 {
-    m_lmmSamples.update(sample);
+    const bool freeRun = m_noSignal;   // silent DMO slot: keep time, learn nothing
+    if (!freeRun)
+        m_lmmSamples.update(sample);
     const int kHist = kGardnerHist;
     m_gHist[m_gN % kHist] = sample;
     m_gN++;
@@ -406,6 +413,16 @@ bool DSDSymbol::pushSampleGardner(short sample)
     };
     const double y  = at(m_gNext);
     const double ym = at(m_gNext - 0.5 * sps);
+    if (freeRun)
+    {
+        // Advance the strobe at the nominal rate; the symbol is still emitted
+        // so the DMR skip counter sees one per symbol period.
+        m_gNext += sps;
+        m_symbol = (int)std::lround(y);
+        m_dsdDecoder->m_state.symbolcnt++;
+        digitizeIntoBinaryBuffer();
+        return true;
+    }
     // Loop-local DC / power estimates (see header comment).
     if (m_gSyms == 0) { m_gDc = y; m_gPow = 0.0; }
     const double aEst = m_gSyms < 50 ? 0.1 : 0.02;

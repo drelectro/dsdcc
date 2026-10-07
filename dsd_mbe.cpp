@@ -145,7 +145,9 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
 #ifdef DSD_USE_MBELIB
     memset((void *) imbe_d, 0, 88);
 
-    mbe_process_result* result = nullptr;
+    mbe_process_result res;
+    memset(&res, 0, sizeof(res));
+    mbe_process_result* result = &res;
 
     if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate7200x4400)
     {
@@ -182,6 +184,15 @@ void DSDMBEDecoder::processFrame(char imbe_fr[8][23], char ambe_fr[4][24], char 
 			m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced);
     }
 
+    m_voiceFrames++;
+    if (res.total_errors > 0)
+    {
+        m_voiceErrors += (unsigned long long) res.total_errors;
+        m_voiceErrorFrames++;
+        if (m_dsdDecoder->m_opts.verbose > 3)
+            DSD_LOG("AMBE frame " << m_voiceFrames << " errors " << res.total_errors << " (c0 " << res.c0_errors << ")");
+    }
+
     if (m_dsdDecoder->m_opts.errorbars == 1)
     {
         //m_dsdDecoder->getLogger().log("%s", m_err_str);
@@ -199,7 +210,9 @@ void DSDMBEDecoder::processData(char imbe_data[88], char ambe_data[49])
     }
 #ifdef DSD_USE_MBELIB
 
-    mbe_process_result* result = nullptr;
+    mbe_process_result res;
+    memset(&res, 0, sizeof(res));
+    mbe_process_result* result = &res;
     if (m_dsdDecoder->m_mbeRate == DSDDecoder::DSDMBERate4400)
     {
         //mbe_processImbe4400Dataf(m_audio_out_temp_buf, &m_errs,

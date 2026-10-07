@@ -222,6 +222,13 @@ void DSDDecoder::setDecodeMode(DSDDecodeMode mode, bool on)
     noCarrier();
     m_squelchTimeoutCount = 0;
     m_nxdnInterSyncCount = -1; // reset to quiet state
+
+    // The slicer defaults to 2FSK until a sync sets the order, but the first
+    // burst's pre-sync half is read back from dibits sliced before that sync:
+    // with only 4FSK protocols enabled, slice 4FSK from the start (XMC
+    // 2026-10-07: the first DMR burst after a cold start lost its first half).
+    if (!m_opts.frame_dstar)
+        m_dsdSymbol.setFSK(4);
 }
 
 void DSDDecoder::setAudioGain(float gain)

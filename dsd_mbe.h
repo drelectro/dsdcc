@@ -56,6 +56,13 @@ public:
     void setChannels(unsigned char channels) { m_channels = channels % 4; }
     void setUpsamplingFactor(int upsample) { m_upsample = upsample; }
     int getUpsamplingFactor() const { return m_upsample; }
+
+    // Voice FEC statistics (XMC): frames passed to mbelib and the errors its
+    // ECC corrected/detected in them (C0 + protected fields).
+    unsigned long long voiceFrames() const { return m_voiceFrames; }
+    unsigned long long voiceErrors() const { return m_voiceErrors; }
+    unsigned long long voiceErrorFrames() const { return m_voiceErrorFrames; }
+    void resetVoiceStats() { m_voiceFrames = m_voiceErrors = m_voiceErrorFrames = 0; }
     void useHP(bool useHP) { m_upsamplingFilter.useHP(useHP); }
 
 private:
@@ -73,6 +80,9 @@ private:
     int m_errs;
     int m_errs2;
     char m_err_str[64];
+    unsigned long long m_voiceFrames = 0;
+    unsigned long long m_voiceErrors = 0;
+    unsigned long long m_voiceErrorFrames = 0;
 
     float m_audio_out_temp_buf[160];   //!< output of decoder
     float *m_audio_out_temp_buf_p;

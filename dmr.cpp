@@ -534,7 +534,10 @@ void DSDDMR::processDataFirstHalf(unsigned int shiftBack)
 
 void DSDDMR::processDataFirstHalfMS()
 {
-    unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(78+1);
+    // Indexed from 12 (no CACH with MS) like the BS path is from 0, so the
+    // look-back must be the same 90+1: 78+1 read 12 dibits late (VC1, VC2a,
+    // slot type and the first info half of every MS burst were garbage; XMC 2026-10-07).
+    unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(90+1);
 
 //    DSD_LOG("DSDDMR::processDataFirstHalfMS");
 
@@ -583,7 +586,10 @@ void DSDDMR::processVoiceFirstHalf(unsigned int shiftBack)
 
 void DSDDMR::processVoiceFirstHalfMS()
 {
-    unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(78+1); // no CACH with MS
+    // Indexed from 12 (no CACH with MS) like the BS path is from 0, so the
+    // look-back must be the same 90+1: 78+1 read 12 dibits late (VC1, VC2a,
+    // slot type and the first info half of every MS burst were garbage; XMC 2026-10-07).
+    unsigned char *dibit_p = m_dsdDecoder->m_dsdSymbol.getDibitBack(90+1);
 
     for (m_symbolIndex = 12; m_symbolIndex < 90; m_symbolIndex++, m_cachSymbolIndex++)
     {
@@ -1241,6 +1247,9 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
             {
                 if (parityCheck != 0)
                 {
+                    if (m_dsdDecoder->m_opts.verbose > 3)
+                        DSD_LOG("EMB-LC parity fail: burst " << m_voice1FrameCount << " lcss " << (int) m_lcss
+                                << " fragment dibit " << voiceEmbSig_dibitsIndex);
                     voiceEmbSig_OK = false;
                     {
                         std::lock_guard<std::mutex> lock(m_stateMutex);

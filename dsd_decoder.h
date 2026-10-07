@@ -192,6 +192,11 @@ public:
 
     /** MBElib support */
 
+    //! Voice FEC statistics over both slots' decoders (XMC; see DSDMBEDecoder).
+    unsigned long long voiceFrames() const { return m_mbeDecoder1.voiceFrames() + m_mbeDecoder2.voiceFrames(); }
+    unsigned long long voiceErrors() const { return m_mbeDecoder1.voiceErrors() + m_mbeDecoder2.voiceErrors(); }
+    unsigned long long voiceErrorFrames() const { return m_mbeDecoder1.voiceErrorFrames() + m_mbeDecoder2.voiceErrorFrames(); }
+
     short *getAudio1(int& nbSamples)
     {
         return m_mbeDecoder1.getAudio(nbSamples);
